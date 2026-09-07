@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -339,6 +340,16 @@ public sealed class TrayWidget : Window
         return b;
     }
 
+    /// <summary>用 FormattedText 预测量字符串在指定字体下的 DIP 宽度（向上取整 + 2px 余量）。</summary>
+    private static double MeasureValueWidth(string text, FontFamily family, double size, FontWeight weight)
+    {
+        FormattedText ft = new(
+            text, CultureInfo.InvariantCulture, System.Windows.FlowDirection.LeftToRight,
+            new Typeface(family, FontStyles.Normal, weight, FontStretches.Normal),
+            size, Brushes.Black, 1.0);
+        return Math.Ceiling(ft.Width) + 2;
+    }
+
     private Pair MakePair(Pair pair, string label, string tipTitle, string tipUnit, double rightMargin = 6)
     {
         // 数值与标签作为一个紧凑块垂直居中：数字 12px 粗体彩色 + 标签 9px 灰，几乎贴在一起
@@ -347,6 +358,10 @@ public sealed class TrayWidget : Window
         pair.Value.FontSize = 12;
         pair.Value.HorizontalAlignment = HorizontalAlignment.Center;
         pair.Value.Margin = new Thickness(0, 0, 0, 2);   // 数字与标签间留自然行距（参考常见任务栏挂件样式）
+        // 钉死数值区宽度：按最宽可能值预测量（功耗到 999.9W、风扇到 8888 转）。
+        // 不钉住的话，位数进位（9.9W→10.1W）和比例数字宽度微变会让挂件窗口反复变宽变位——抽动的根源
+        pair.Value.MinWidth = MeasureValueWidth(
+            tipUnit == "W" ? "888.8W" : "8888", pair.Value.FontFamily, pair.Value.FontSize, pair.Value.FontWeight);
         pair.Value.Text = "--";
 
         pair.Label.Text = label;
