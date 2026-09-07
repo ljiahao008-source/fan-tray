@@ -362,6 +362,7 @@ public sealed class TrayWidget : Window
         // 不钉住的话，位数进位（9.9W→10.1W）和比例数字宽度微变会让挂件窗口反复变宽变位——抽动的根源
         pair.Value.MinWidth = MeasureValueWidth(
             tipUnit == "W" ? "888.8W" : "8888", pair.Value.FontFamily, pair.Value.FontSize, pair.Value.FontWeight);
+        pair.Value.TextAlignment = TextAlignment.Center;   // 定宽框内文字居中，否则默认左对齐会与下方居中标签错位
         pair.Value.Text = "--";
 
         pair.Label.Text = label;
