@@ -1,0 +1,45 @@
+<Window x:Class="MonitoringApp.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置"
+        Width="420" Height="560"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="{StaticResource BgBrush}">
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+  <StackPanel Margin="28">
+    <TextBlock Text="设置" FontSize="20" FontWeight="Bold" Foreground="{StaticResource CyanBrush}" />
+
+    <TextBlock Text="托盘图标显示（勾选 = 在托盘展示该项）" Margin="0,22,0,6" Foreground="{StaticResource TextDimBrush}" FontSize="13" />
+    <WrapPanel>
+      <CheckBox x:Name="ShowPower" Content="CPU 功耗" Margin="0,0,16,0" Foreground="{StaticResource TextBrush}" />
+      <CheckBox x:Name="ShowTemp" Content="CPU 温度" Margin="0,0,16,0" Foreground="{StaticResource TextBrush}" />
+      <CheckBox x:Name="ShowFan" Content="风扇转速" Margin="0,0,16,0" Foreground="{StaticResource TextBrush}" />
+      <CheckBox x:Name="ShowMem" Content="内存占用" Margin="0,0,16,0" Foreground="{StaticResource TextBrush}" />
+      <CheckBox x:Name="ShowNetSpeed" Content="网络速率（↑上行 ↓下行 合显）" Foreground="{StaticResource TextBrush}" ToolTip="单个托盘图标内同时显示上行与下行速率（上行淡紫在上、下行天蓝在下）；单击图标可查看当前速率与会话累计流量的完整详情" />
+    </WrapPanel>
+
+    <TextBlock Text="数据刷新间隔" Margin="0,22,0,6" Foreground="{StaticResource TextDimBrush}" FontSize="13" />
+    <ComboBox x:Name="IntervalCombo" />
+
+    <TextBlock Text="温度警告阈值（橙色，℃）" Margin="0,22,0,6" Foreground="{StaticResource TextDimBrush}" FontSize="13" />
+    <DockPanel>
+      <TextBlock x:Name="WarnLabel" Text="70" Width="36" Foreground="{StaticResource OrangeBrush}" DockPanel.Dock="Right" TextAlignment="Right" />
+      <Slider x:Name="WarnSlider" Minimum="40" Maximum="100" ValueChanged="OnWarnChanged" />
+    </DockPanel>
+
+    <TextBlock Text="温度临界阈值（红色，℃）" Margin="0,22,0,6" Foreground="{StaticResource TextDimBrush}" FontSize="13" />
+    <DockPanel>
+      <TextBlock x:Name="CriticalLabel" Text="85" Width="36" Foreground="{StaticResource RedBrush}" DockPanel.Dock="Right" TextAlignment="Right" />
+      <Slider x:Name="CriticalSlider" Minimum="40" Maximum="100" ValueChanged="OnCriticalChanged" />
+    </DockPanel>
+
+    <CheckBox x:Name="AutoStart" Content="开机自启（登录 Windows 后自动在后台运行，不弹窗口）" Margin="0,14,0,0" Foreground="{StaticResource TextBrush}" />
+
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,28,0,0">
+      <Button x:Name="CancelBtn" Content="取消" Padding="20,8" Margin="0,0,10,0" Background="{StaticResource PanelBrush}" Foreground="{StaticResource TextBrush}" BorderBrush="{StaticResource BorderBrush}" Click="OnCancel" />
+      <Button x:Name="OkBtn" Content="确定" Padding="20,8" Background="{StaticResource AccentBrush}" Foreground="#FFFFFF" Click="OnOk" />
+    </StackPanel>
+  </StackPanel>
+  </ScrollViewer>
+</Window>

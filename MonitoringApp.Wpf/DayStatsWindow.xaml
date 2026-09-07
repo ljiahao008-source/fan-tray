@@ -1,0 +1,80 @@
+<Window x:Class="MonitoringApp.DayStatsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="每日监控记录"
+        Width="400" Height="470"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="{StaticResource BgBrush}">
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="22">
+      <TextBlock x:Name="DateText" FontSize="17" FontWeight="Bold" Foreground="{StaticResource CyanBrush}" Text="" />
+      <TextBlock FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,14" Text="当日四指标监控记录" />
+
+      <!-- CPU 功耗 -->
+      <Border Background="{StaticResource PanelBrush}" CornerRadius="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Margin="0,0,0,8" Padding="12,9">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="4" CornerRadius="2" Margin="0,2,8,2" Background="#EA580C" />
+            <TextBlock Text="CPU 功耗 (W)" Foreground="{StaticResource TextDimBrush}" FontSize="12" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Grid.Column="1" x:Name="PowerText" Foreground="{StaticResource TextBrush}" FontSize="12" Text="平均 -- · 最高 -- · 最低 --" TextAlignment="Right" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <!-- CPU 温度 -->
+      <Border Background="{StaticResource PanelBrush}" CornerRadius="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Margin="0,0,0,8" Padding="12,9">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="4" CornerRadius="2" Margin="0,2,8,2" Background="{StaticResource OrangeBrush}" />
+            <TextBlock Text="CPU 温度 (℃)" Foreground="{StaticResource TextDimBrush}" FontSize="12" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Grid.Column="1" x:Name="TempText" Foreground="{StaticResource TextBrush}" FontSize="12" Text="平均 -- · 最高 -- · 最低 --" TextAlignment="Right" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <!-- 风扇转速 -->
+      <Border Background="{StaticResource PanelBrush}" CornerRadius="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Margin="0,0,0,8" Padding="12,9">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="4" CornerRadius="2" Margin="0,2,8,2" Background="#0D9488" />
+            <TextBlock Text="风扇转速 (RPM)" Foreground="{StaticResource TextDimBrush}" FontSize="12" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Grid.Column="1" x:Name="FanText" Foreground="{StaticResource TextBrush}" FontSize="12" Text="平均 -- · 最高 -- · 最低 --" TextAlignment="Right" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <!-- 内存占用 -->
+      <Border Background="{StaticResource PanelBrush}" CornerRadius="8" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Margin="0,0,0,8" Padding="12,9">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal">
+            <Border Width="4" CornerRadius="2" Margin="0,2,8,2" Background="{StaticResource BlueBrush}" />
+            <TextBlock Text="内存占用 (%)" Foreground="{StaticResource TextDimBrush}" FontSize="12" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Grid.Column="1" x:Name="MemText" Foreground="{StaticResource TextBrush}" FontSize="12" Text="平均 -- · 最高 -- · 最低 --" TextAlignment="Right" VerticalAlignment="Center" />
+        </Grid>
+      </Border>
+
+      <TextBlock x:Name="SampleText" FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,6,0,12" Text="" />
+
+      <Button Content="关 闭" Click="OnClose" HorizontalAlignment="Right" Padding="28,8"
+              Background="{StaticResource PanelBrush}" Foreground="{StaticResource TextBrush}" BorderBrush="{StaticResource BorderBrush}" />
+    </StackPanel>
+  </ScrollViewer>
+</Window>
