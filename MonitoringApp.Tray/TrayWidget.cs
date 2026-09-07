@@ -92,7 +92,9 @@ public sealed class TrayWidget : Window
         // 标题/数值/单位做成同一 TextBlock 的三个 Run —— 共享基线，字号不同也能对齐
         public Popup TipPopup { get; } = new();
         public StackPanel TipCard { get; } = new();
-        public TextBlock TipHead { get; } = new();
+        // 标题单独一个 TextBlock（负底边距压到底线）；数值+单位同一 TextBlock（同为 Segoe，基线天然齐）
+        public TextBlock TipTitle { get; } = new();
+        public TextBlock TipValue { get; } = new();
         public Run TipValueRun { get; } = new("--");
         public Run TipUnitRun { get; } = new();
         public TextBlock TipMin { get; } = new();
@@ -387,17 +389,21 @@ public sealed class TrayWidget : Window
         Brush labelFg = Fg(0x96, 0xFF, 0xFF, 0xFF);
         Brush valueFg = Fg(0xF2, 0xFF, 0xFF, 0xFF);
 
-        // 标题 / 数值 / 单位合并为一个 TextBlock 的三个 Run，共享基线 → 不同字号严格对齐
-        Run titleRun = new(title)
-        {
-            FontFamily = new FontFamily("Microsoft YaHei UI"),
-            FontSize = 12,
-            Foreground = titleFg,
-        };
+        // 头部行结构：标题(TextBlock，负底边距压底) + [数值 Run + 单位 Run](同一 TextBlock 共享基线)。
+        // 之前"三 Run 共基线"方案中文仍偏高：YaHei 12px 的字形底比 Segoe 20px 数字的字形底高约 3px
+        //（Segoe 20px descent≈5.0px，YaHei 12px descent≈3.1px，基线相同时底边不齐）。
+        // 现改为全部底对齐 + 标题负底边距 3px 补偿，底线严格齐平。
+        pair.TipTitle.Text = title;
+        pair.TipTitle.FontFamily = new FontFamily("Microsoft YaHei UI");
+        pair.TipTitle.FontSize = 12;
+        pair.TipTitle.Foreground = titleFg;
+        pair.TipTitle.VerticalAlignment = VerticalAlignment.Bottom;
+        pair.TipTitle.Margin = new Thickness(0, 0, 0, -3);   // 下压 3px：补齐与 20px 数字（Segoe descent）的底边差
 
-        pair.TipValueRun.FontFamily = new FontFamily("Segoe UI");
-        pair.TipValueRun.FontWeight = FontWeights.Bold;
-        pair.TipValueRun.FontSize = 20;
+        pair.TipValue.FontFamily = new FontFamily("Segoe UI");
+        pair.TipValue.FontWeight = FontWeights.Bold;
+        pair.TipValue.FontSize = 20;
+        pair.TipValue.VerticalAlignment = VerticalAlignment.Bottom;
         // 颜色由 SetPair 按数值状态动态更新（正常绿 / 偏高橙 / 超高红），此处不设固定色
 
         pair.TipUnitRun.Text = " " + unit;
@@ -405,14 +411,12 @@ public sealed class TrayWidget : Window
         pair.TipUnitRun.FontSize = 11;
         pair.TipUnitRun.Foreground = labelFg;
 
-        pair.TipHead.Inlines.Add(titleRun);
-        pair.TipHead.Inlines.Add(pair.TipValueRun);
-        pair.TipHead.Inlines.Add(pair.TipUnitRun);
-        pair.TipHead.VerticalAlignment = VerticalAlignment.Bottom;
+        pair.TipValue.Inlines.Add(pair.TipValueRun);
+        pair.TipValue.Inlines.Add(pair.TipUnitRun);
 
-        DockPanel head = new() { LastChildFill = false };
-        DockPanel.SetDock(pair.TipHead, System.Windows.Controls.Dock.Left);
-        head.Children.Add(pair.TipHead);
+        StackPanel head = new() { Orientation = Orientation.Horizontal };
+        head.Children.Add(pair.TipTitle);
+        head.Children.Add(pair.TipValue);
 
         TextBlock MakeStatLabel(string text) => new()
         {
