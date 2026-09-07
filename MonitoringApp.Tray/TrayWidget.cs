@@ -389,16 +389,15 @@ public sealed class TrayWidget : Window
         Brush labelFg = Fg(0x96, 0xFF, 0xFF, 0xFF);
         Brush valueFg = Fg(0xF2, 0xFF, 0xFF, 0xFF);
 
-        // 头部行结构：标题(TextBlock，负底边距压底) + [数值 Run + 单位 Run](同一 TextBlock 共享基线)。
-        // 之前"三 Run 共基线"方案中文仍偏高：YaHei 12px 的字形底比 Segoe 20px 数字的字形底高约 3px
-        //（Segoe 20px descent≈5.0px，YaHei 12px descent≈3.1px，基线相同时底边不齐）。
-        // 现改为全部底对齐 + 标题负底边距 3px 补偿，底线严格齐平。
+        // 头部行结构：标题(TextBlock，正底边距提到底线) + [数值 Run + 单位 Run](同一 TextBlock 共享基线)。
+        // 共基线时 YaHei 12px 的中文字形底比 Segoe 20px 数字的字形底低约 3px（离屏渲染实测），
+        // 标题底边距 +2.5px 上提补偿后逐像素实测 delta=0，三者底线齐平。
         pair.TipTitle.Text = title;
         pair.TipTitle.FontFamily = new FontFamily("Microsoft YaHei UI");
         pair.TipTitle.FontSize = 12;
         pair.TipTitle.Foreground = titleFg;
         pair.TipTitle.VerticalAlignment = VerticalAlignment.Bottom;
-        pair.TipTitle.Margin = new Thickness(0, 0, 0, -3);   // 下压 3px：补齐与 20px 数字（Segoe descent）的底边差
+        pair.TipTitle.Margin = new Thickness(0, 0, 0, 2.5);   // 上提 2.5px：实测精确补偿（2.25~2.75 均有效）
 
         pair.TipValue.FontFamily = new FontFamily("Segoe UI");
         pair.TipValue.FontWeight = FontWeights.Bold;
