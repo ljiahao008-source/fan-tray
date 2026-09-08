@@ -45,7 +45,7 @@ if (args.Length == 0)
     return 1;
 }
 
-string dir = @"C:\Users\<用户名>\Desktop\机械革命监控\源码\Shot\shots";
+string dir = Path.Combine(AppContext.BaseDirectory, "shots");
 Directory.CreateDirectory(dir);
 
 switch (args[0])

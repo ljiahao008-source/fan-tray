@@ -17,7 +17,7 @@
 
 ## 📦 下载安装
 
-前往 [Releases](https://github.com/ljiahao008-source/MechrevoMonitorTray/releases) 下载 `MechrevoMonitorTray-Setup-x.y.z.exe`：
+前往 [Releases](https://github.com/ljiahao008-source/fan-tray/releases) 下载 `MechrevoMonitorTray-Setup-x.y.z.exe`：
 
 1. 双击安装（内置中文安装向导，可选桌面快捷方式 / 开机自启）
 2. 启动后自动嵌入任务栏，右键托盘图标可打开设置、重置统计或退出

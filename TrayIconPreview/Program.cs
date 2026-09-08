@@ -4,7 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using MonitoringApp;
 
-string outPath = @"C:\Users\<用户名>\Desktop\机械革命监控\托盘图标_v7_预览.png";
+string outPath = Path.Combine(AppContext.BaseDirectory, "托盘图标_预览.png");
 
 var cases = new List<(string Name, string Text, Func<bool, Color> Badge, bool Net)>
 {
