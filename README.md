@@ -2,7 +2,7 @@
 
 机械革命（Mechrevo）笔记本的轻量硬件监控托盘工具：在任务栏托盘角落实时显示 **CPU 功耗** 与 **风扇转速**，不弹窗、不占桌面，专注做好一件事。
 
-![version](https://img.shields.io/badge/version-3.2.1-blue)
+![version](https://img.shields.io/badge/version-3.2.2-blue)
 
 ## ✨ 特性
 
