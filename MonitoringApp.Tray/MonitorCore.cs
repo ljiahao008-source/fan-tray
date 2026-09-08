@@ -41,6 +41,12 @@ public sealed class Metric
         _sum = 0;
         _count = 0;
     }
+
+    /// <summary>仅刷新当前值（防抖沿用上拍有效值的显示用），不重复计入 min/max/avg 统计。</summary>
+    internal void Repeat(float? v)
+    {
+        Current = v;
+    }
 }
 
 /// <summary>两指标监控快照：CPU 功耗、风扇转速（各含最低/最高/平均）。</summary>
@@ -118,10 +124,14 @@ public sealed class MonitorCore : IDisposable
 
         // 防抖：WMI 偶发一拍失败/返回无效值属正常抖动，沿用上次有效值显示，
         // 连续 3 拍（约 3 秒）都失败才判定真无数据显示 "--"
+        bool fanRepeated = false;
         if (fanRpm is null)
         {
             if (++_fanFailStreak < 3)
+            {
                 fanRpm = _lastFanRpm;
+                fanRepeated = true;   // 沿用值只刷显示，不重复计入统计
+            }
             else
                 _lastFanRpm = null;
         }
@@ -153,7 +163,10 @@ public sealed class MonitorCore : IDisposable
         lock (_statsLock)
         {
             _snapshot.CpuPower.Update(cpuPower);
-            _snapshot.FanRpm.Update(fanRpm);
+            if (fanRepeated)
+                _snapshot.FanRpm.Repeat(fanRpm);
+            else
+                _snapshot.FanRpm.Update(fanRpm);
             return _snapshot;
         }
     }
