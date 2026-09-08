@@ -41,11 +41,21 @@ public sealed class MechrevoEcProvider : IDisposable
     /// <summary>是否检测到机械革命 EC 接口。</summary>
     public bool IsAvailable => _ps != null;
 
-    /// <summary>风扇转速（RPM）。返回值低 16 位为风扇 1 转速。</summary>
+    /// <summary>风扇转速（RPM）。与控制中心 GetFanRPM 同构：FanDuty 低 16 位为风扇 1，高 16 位为风扇 2。
+    /// 优先取风扇 1（与控制中心显示逻辑一致），风扇 1 无效时回退风扇 2（部分机型 CPU 风扇接在通道 2）。</summary>
     public float? ReadFanRpm()
     {
+        (float? fan1, float? fan2) = ReadFanRpms();
+        if (fan1 is { } v1)
+            return v1;
+        return fan2;
+    }
+
+    /// <summary>同时读取双风扇：FanDuty 低 16 位为风扇 1、高 16 位为风扇 2（0 或 0x7FFFFFFF 视为无效）。</summary>
+    public (float? Fan1, float? Fan2) ReadFanRpms()
+    {
         if (_ps == null)
-            return null;
+            return (null, null);
 
         try
         {
@@ -56,8 +66,7 @@ public sealed class MechrevoEcProvider : IDisposable
             if (outParams?["FanDuty"] is not null)
             {
                 uint fanDuty = Convert.ToUInt32(outParams["FanDuty"]);
-                uint rpm = fanDuty & 0xFFFF;
-                return rpm is > 0 and < Invalid ? rpm : null;
+                return (ParseRpm(fanDuty & 0xFFFF), ParseRpm((fanDuty >> 16) & 0xFFFF));
             }
         }
         catch
@@ -65,8 +74,10 @@ public sealed class MechrevoEcProvider : IDisposable
             // WMI 读取失败：返回 null 降级，不向上抛异常拖垮其他指标。
         }
 
-        return null;
+        return (null, null);
     }
+
+    private static float? ParseRpm(uint raw) => raw is > 0 and < Invalid ? raw : null;
 
     /// <summary>硬件温度（°C）。<paramref name="hwTempType"/> = 1 为 CPU 温度。</summary>
     public float? ReadTemperature(byte hwTempType = 1)

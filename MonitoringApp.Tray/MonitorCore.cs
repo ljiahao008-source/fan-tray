@@ -55,7 +55,9 @@ public sealed class MonitoringSnapshot
 /// </summary>
 public sealed class MonitorCore : IDisposable
 {
-    private const double FanCacheSeconds = 3.0;
+    // 风扇 WMI 轮询节流：与机械革命控制中心一致（其 updaterfan1 线程 sleep(1.5) 直读 WMI，逆向实锤）。
+    // 注意 1 秒采样粒度下实际节拍为 ~2 秒一读（1.5s 阈值 + 1s tick），介于原 3s 与 CC 的 1.5s 之间
+    private const double FanCacheSeconds = 1.5;
 
     private readonly Computer _computer;
     private readonly MechrevoEcProvider _ec;
