@@ -71,6 +71,8 @@ public sealed class MonitorCore : IDisposable
     private IHardware? _cachedCpu;
     private ISensor? _cachedPowerSensor;
     private DateTime _powerDeadSince = DateTime.MinValue;
+    private float? _lastFanRpm;
+    private int _fanFailStreak;
 
     public MonitorCore()
     {
@@ -113,6 +115,21 @@ public sealed class MonitorCore : IDisposable
         }
 
         float? fanRpm = _ec.ReadFanRpm();   // WMI 最慢，放在锁外；与控制中心一致：每拍直读，无值缓存
+
+        // 防抖：WMI 偶发一拍失败/返回无效值属正常抖动，沿用上次有效值显示，
+        // 连续 3 拍（约 3 秒）都失败才判定真无数据显示 "--"
+        if (fanRpm is null)
+        {
+            if (++_fanFailStreak < 3)
+                fanRpm = _lastFanRpm;
+            else
+                _lastFanRpm = null;
+        }
+        else
+        {
+            _fanFailStreak = 0;
+            _lastFanRpm = fanRpm;
+        }
 
         // 功耗自愈：持续为 0/null 说明 PawnIO 内核驱动没起来（开机按需启动竞态/被优化软件禁用），
         // 拉起驱动 + 重建引擎。已提权进程执行 sc start 无副作用；驱动正常时此分支永远不触发。
