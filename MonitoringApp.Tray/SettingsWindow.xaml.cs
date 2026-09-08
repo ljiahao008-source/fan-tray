@@ -30,10 +30,19 @@ public partial class SettingsWindow : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        _settings.RefreshIntervalMs = Intervals[IntervalCombo.SelectedIndex].Ms;
+        // 下拉框意外处于无选中状态时回退 1 秒，避免索引越界
+        int idx = IntervalCombo.SelectedIndex >= 0 ? IntervalCombo.SelectedIndex : 1;
+        _settings.RefreshIntervalMs = Intervals[idx].Ms;
         _settings.AutoStart = AutoStart.IsChecked == true;
-        _settings.Save();
-        _settings.ApplyAutoStart();
+
+        // 写入失败要可见：旧版静默吞掉，用户以为保存成功实则没有
+        string? error = null;
+        if (!_settings.Save())
+            error = "设置未能写入 config.json（程序所在目录可能没有写入权限），本次修改仅当前运行有效。";
+        if (!_settings.ApplyAutoStart())
+            error = (error is null ? "" : error + "\n") + "开机自启设置失败：创建计划任务需要管理员权限。";
+        if (error != null)
+            System.Windows.MessageBox.Show(this, error, "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         DialogResult = true;
         Close();
     }

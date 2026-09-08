@@ -133,9 +133,21 @@ public sealed class TrayController
         WF.ToolStripMenuItem autoStart = new("开机自启") { CheckOnClick = true, Checked = _settings.AutoStart };
         autoStart.Click += (_, _) =>
         {
-            _settings.AutoStart = autoStart.Checked;
-            _settings.Save();
-            _settings.ApplyAutoStart();
+            bool enable = autoStart.Checked;
+            _settings.AutoStart = enable;
+            if (_settings.ApplyAutoStart())
+            {
+                _settings.Save();
+            }
+            else
+            {
+                // 失败回滚勾选与设置，并给出可见提示（旧版静默失败，用户以为自启已生效）
+                autoStart.Checked = !enable;
+                _settings.AutoStart = !enable;
+                _settings.Save();
+                WF.MessageBox.Show("开机自启设置失败：创建计划任务需要管理员权限。", "机械革命监控",
+                    WF.MessageBoxButtons.OK, WF.MessageBoxIcon.Warning);
+            }
         };
         menu.Items.Add(autoStart);
 

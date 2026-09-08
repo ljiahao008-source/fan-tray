@@ -3,7 +3,7 @@
 
 #define MyAppName "机械革命监控"
 #define MyAppNameEn "MechrevoMonitorTray"
-#define MyAppVersion "3.1.0"
+#define MyAppVersion "3.2.0"
 #define MyAppExeName "MechrevoMonitorTray.exe"
 #define MyAppPublisher "MechrevoMonitorTray"
 
@@ -44,15 +44,17 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "CPU �
 Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
-[Registry]
-; 与应用内置自启动逻辑同键同名（HKCU\...\Run\MechrevoMonitorTray），卸载时自动删除
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MechrevoMonitorTray"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: autostart; Flags: uninsdeletevalue
-
 [Run]
+; 开机自启用计划任务（最高权限）而非 HKCU Run：程序 requireAdministrator，
+; HKCU Run 登录自启是非提权运行，读不到 MSR，功耗会一直显示 "--"
+Filename: "schtasks"; Parameters: "/Create /TN ""MechrevoMonitorTray"" /TR ""\""{app}\{#MyAppExeName}""\"""" /SC ONLOGON /RL HIGHEST /F"; Tasks: autostart; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{cmd}"; Parameters: "/C taskkill /f /im {#MyAppExeName} >nul 2>&1"; Flags: runhidden; RunOnceId: "KillApp"
+Filename: "schtasks"; Parameters: "/Delete /TN ""MechrevoMonitorTray"" /F"; Flags: runhidden; RunOnceId: "DelTask"
+; 清理 3.1.0 及更早版本的 HKCU Run 自启项
+Filename: "{cmd}"; Parameters: "/C reg delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v MechrevoMonitorTray /f >nul 2>&1"; Flags: runhidden; RunOnceId: "DelLegacyRun"
 
 [Code]
 // 安装前停掉正在运行的监控进程（最多重试 5 次），避免文件占用导致安装失败
