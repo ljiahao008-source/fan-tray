@@ -21,6 +21,10 @@ public partial class App : System.Windows.Application
 
         DispatcherUnhandledException += (_, ev) => { Log(ev.Exception); ev.Handled = true; };
         AppDomain.CurrentDomain.UnhandledException += (_, ev) => Log(ev.ExceptionObject as Exception);
+        // WinForms 控件（NotifyIcon/菜单）回调里的异常走 ThreadException，不经过 WPF Dispatcher，
+        // 不挂这个 handler 会弹系统错误框且不留任何日志
+        System.Windows.Forms.Application.SetUnhandledExceptionMode(System.Windows.Forms.UnhandledExceptionMode.CatchException);
+        System.Windows.Forms.Application.ThreadException += (_, ev) => Log(ev.Exception);
 
         // 无主窗口：启动即常驻托盘，显式退出前不结束进程
         var tray = new TrayController();
@@ -40,7 +44,8 @@ public partial class App : System.Windows.Application
 
         try
         {
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), ex.ToString());
+            File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
         }
         catch
         {

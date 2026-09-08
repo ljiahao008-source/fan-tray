@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Windows.Threading;
 using LibreHardwareMonitor.Mechrevo;
@@ -190,13 +191,31 @@ public sealed class TrayController
     {
         _sampleTimer?.Dispose();
         _sampleTimer = null;
-        _settings.Save();
-        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-        _icon.Visible = false;
-        _icon.Dispose();
-        _widget.Dispose();
-        _core.Dispose();
+        // 每步独立兜底：任何一步抛异常都不能中断退出（曾有用户点"退出"弹异常框后进程残留）
+        TryStep(() => _settings.Save());
+        TryStep(() => SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged);
+        TryStep(() => { _icon.Visible = false; });
+        TryStep(() => { _icon.Dispose(); });
+        TryStep(() => _widget.Dispose());
+        TryStep(() => _core.Dispose());
         System.Windows.Application.Current.Shutdown();
+    }
+
+    private static void TryStep(Action step)
+    {
+        try { step(); }
+        catch (Exception ex)
+        {
+            try
+            {
+                File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"),
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ExitApp step failed: {ex}\n\n");
+            }
+            catch
+            {
+                // 日志也写不进去时只能放弃
+            }
+        }
     }
 
     // —— 环境（主题） ——
