@@ -27,6 +27,7 @@ namespace MonitoringApp.Tray;
 public sealed class TrayWidget : Window
 {
     private const int GWL_STYLE = -16;
+    private const int WM_MOVE = 0x0003;
     private const long WS_CHILD = 0x40000000L;
     private const long WS_VISIBLE = 0x10000000L;
     private const uint SWP_NOMOVE = 0x0002;
@@ -568,6 +569,10 @@ public sealed class TrayWidget : Window
         if (!_embedded || _taskbar == IntPtr.Zero || !IsWindow(_taskbar))
             return;
 
+        // 悬停卡片打开时不动窗口：挪窗会让卡片跟着锚点瞬移，等卡片收起后的下一个校准周期再贴
+        if (_power.TipPopup.IsOpen || _fan.TipPopup.IsOpen)
+            return;
+
         IntPtr tray = FindWindowEx(_taskbar, IntPtr.Zero, "TrayNotifyWnd", null);
         if (tray == IntPtr.Zero || !GetWindowRect(_taskbar, out RECT tb) || !GetWindowRect(tray, out RECT trayRect))
             return;
@@ -662,7 +667,17 @@ public sealed class TrayWidget : Window
         {
             _embedded = false;
             Dispatcher.BeginInvoke(() => Embed());
+            return IntPtr.Zero;
         }
+
+        // 任务栏自动隐藏滑动 / 布局变化会连发 WM_MOVE：立刻收起悬浮卡片，
+        // 否则卡片按移动前的锚点坐标悬在错位处（表现为"卡片飞走"，要等校准才回来）
+        if (msg == WM_MOVE && (_power.TipPopup.IsOpen || _fan.TipPopup.IsOpen))
+        {
+            _power.TipPopup.IsOpen = false;
+            _fan.TipPopup.IsOpen = false;
+        }
+
         return IntPtr.Zero;
     }
 }
