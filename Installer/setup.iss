@@ -3,7 +3,7 @@
 
 #define MyAppName "机械革命监控"
 #define MyAppNameEn "MechrevoMonitorTray"
-#define MyAppVersion "3.2.6"
+#define MyAppVersion "3.2.7"
 #define MyAppExeName "MechrevoMonitorTray.exe"
 #define MyAppPublisher "MechrevoMonitorTray"
 

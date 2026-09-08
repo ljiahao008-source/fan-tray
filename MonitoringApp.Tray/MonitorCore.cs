@@ -62,25 +62,30 @@ public sealed class MonitorCore : IDisposable
 {
     // 风扇无值缓存：与控制中心一致（其采集线程每 1.5s 直读 WMI，无缓存），我们按 1s 采样间隔每拍直读
 
-    private readonly Computer _computer;
+    private const int PowerDeadReviveSeconds = 60;   // 功耗持续为 0/空超过该秒数 → 拉起 PawnIO 驱动并重建引擎
+
+    private Computer _computer;
     private readonly MechrevoEcProvider _ec;
     private readonly MonitoringSnapshot _snapshot = new();
     private readonly object _statsLock = new();
     private IHardware? _cachedCpu;
     private ISensor? _cachedPowerSensor;
+    private DateTime _powerDeadSince = DateTime.MinValue;
 
     public MonitorCore()
     {
-        _computer = new Computer
-        {
-            IsCpuEnabled = true,
-            IsGpuEnabled = false,
-            IsMemoryEnabled = false,
-            IsMotherboardEnabled = false,
-        };
+        _computer = CreateComputer();
         _computer.Open();
         _ec = new MechrevoEcProvider();
     }
+
+    private static Computer CreateComputer() => new()
+    {
+        IsCpuEnabled = true,
+        IsGpuEnabled = false,
+        IsMemoryEnabled = false,
+        IsMotherboardEnabled = false,
+    };
 
     /// <summary>单次读取并更新两指标快照。耗时的硬件 Update / WMI 在锁外执行。</summary>
     public MonitoringSnapshot Read()
@@ -109,11 +114,62 @@ public sealed class MonitorCore : IDisposable
 
         float? fanRpm = _ec.ReadFanRpm();   // WMI 最慢，放在锁外；与控制中心一致：每拍直读，无值缓存
 
+        // 功耗自愈：持续为 0/null 说明 PawnIO 内核驱动没起来（开机按需启动竞态/被优化软件禁用），
+        // 拉起驱动 + 重建引擎。已提权进程执行 sc start 无副作用；驱动正常时此分支永远不触发。
+        if (cpuPower is null or 0)
+        {
+            if (_powerDeadSince == DateTime.MinValue)
+            {
+                _powerDeadSince = DateTime.Now;
+            }
+            else if ((DateTime.Now - _powerDeadSince).TotalSeconds >= PowerDeadReviveSeconds)
+            {
+                ReviveEngine();
+                _powerDeadSince = DateTime.Now;
+            }
+        }
+        else
+        {
+            _powerDeadSince = DateTime.MinValue;
+        }
+
         lock (_statsLock)
         {
             _snapshot.CpuPower.Update(cpuPower);
             _snapshot.FanRpm.Update(fanRpm);
             return _snapshot;
+        }
+    }
+
+    /// <summary>自愈：拉起 PawnIO 驱动服务并重建 LHM 引擎（采样后台线程调用，风扇的 _ec 与引擎无关不受影响）。</summary>
+    private void ReviveEngine()
+    {
+        try
+        {
+            using System.Diagnostics.Process? p = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("sc.exe", "start PawnIO")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                });
+            p?.WaitForExit(5000);
+        }
+        catch
+        {
+            // 拉起失败不打断采样，下个周期再试
+        }
+
+        try
+        {
+            _cachedCpu = null;
+            _cachedPowerSensor = null;
+            _computer.Close();
+            _computer = CreateComputer();
+            _computer.Open();
+        }
+        catch
+        {
+            // 重建失败同样留到下个周期重试
         }
     }
 
