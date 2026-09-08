@@ -577,6 +577,12 @@ public sealed class TrayWidget : Window
         if (tray == IntPtr.Zero || !GetWindowRect(_taskbar, out RECT tb) || !GetWindowRect(tray, out RECT trayRect))
             return;
 
+        // 任务栏滑动动画期间，两次 GetWindowRect 可能采到动画的不同瞬间，
+        // 相减出的相对位置是错的（挂件会瞬跳）。复采一次，还在动就放弃本拍。
+        GetWindowRect(tray, out RECT trayRect2);
+        if (Math.Abs(trayRect2.Left - trayRect.Left) > 2)
+            return;
+
         double scale = GetDpiForWindow(_hwnd) / 96.0;
 
         // 窗口宽度收窄到真实内容宽度；文本列均为固定宽，数字变化不会引起宽度抖动
@@ -616,6 +622,13 @@ public sealed class TrayWidget : Window
         }
 
         x = Math.Max(0, x);
+
+        // 合理性边界：右缘永不进入托盘角落前 150px——算出这种位置说明矩形是瞬态脏值，放弃本拍
+        if (x + widthPx > tb.Right - tb.Left - 150)
+        {
+            App.Trace("position sanity skip: x=" + x + " w=" + widthPx + " tbW=" + (tb.Right - tb.Left));
+            return;
+        }
 
         // 关键：位置和尺寸都没变就不再 SetWindowPos——避免打断 ToolTip 稳定显示
         if (x == _lastX && widthPx == _lastW && heightPx == _lastH)
