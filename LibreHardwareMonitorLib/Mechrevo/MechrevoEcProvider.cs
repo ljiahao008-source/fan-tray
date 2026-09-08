@@ -1,6 +1,8 @@
 // This file is NOT derived from MPL-2.0 code. It is an original addition.
 // 机械革命私有 EC 接口读取器（独立新增，非 MPL 衍生，可自选许可）
 
+#nullable enable
+
 using System;
 using System.Management;
 
@@ -9,13 +11,13 @@ namespace LibreHardwareMonitor.Mechrevo;
 /// <summary>
 /// 通过 ACPI WMI <c>PowerSwitchInterface</c>（ACPI\PNP0C14\IP3POWERSWITCH_0）读取机械革命私有 EC 数据。
 /// LibreHardwareMonitor 原生无法读取机械革命机型的风扇转速（私有协议，不走标准 SMBus/Super I/O），
-/// 本 Provider 通过 <c>GetFanControl</c> / <c>GetHwTemp</c> 补齐。
+/// 本 Provider 通过 <c>GetFanControl</c> 补齐。
 /// </summary>
 public sealed class MechrevoEcProvider : IDisposable
 {
     private const uint Invalid = 2147483647; // 0x7FFFFFFF，EC 返回的"无效/不支持"标记
 
-    private readonly ManagementObject _ps;
+    private readonly ManagementObject? _ps;
 
     public MechrevoEcProvider()
     {
@@ -37,9 +39,6 @@ public sealed class MechrevoEcProvider : IDisposable
             _ps = null;
         }
     }
-
-    /// <summary>是否检测到机械革命 EC 接口。</summary>
-    public bool IsAvailable => _ps != null;
 
     /// <summary>风扇转速（RPM）。与控制中心 GetFanRPM 同构：FanDuty 低 16 位为风扇 1，高 16 位为风扇 2。
     /// 优先取风扇 1（与控制中心显示逻辑一致），风扇 1 无效时回退风扇 2（部分机型 CPU 风扇接在通道 2）。</summary>

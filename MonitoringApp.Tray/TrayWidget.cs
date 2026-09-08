@@ -30,7 +30,6 @@ public sealed class TrayWidget : Window
     private const long WS_CHILD = 0x40000000L;
     private const long WS_VISIBLE = 0x10000000L;
     private const uint SWP_NOMOVE = 0x0002;
-    private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
 

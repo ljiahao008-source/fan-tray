@@ -12,8 +12,6 @@
             <SolidColorBrush x:Key="TextBrush" Color="#1B2430" />
             <SolidColorBrush x:Key="TextDimBrush" Color="#6B7686" />
             <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
-            <SolidColorBrush x:Key="PowerBrush" Color="#EA580C" />
-            <SolidColorBrush x:Key="FanBrush" Color="#0D9488" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>

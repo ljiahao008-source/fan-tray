@@ -1,6 +1,7 @@
 // 精简监控核心：仅 CPU 功耗（LibreHardwareMonitor）+ 风扇转速（机械革命私有 EC）。
 
 using System;
+using System.Text.RegularExpressions;
 using LibreHardwareMonitor.Hardware;
 using LibreHardwareMonitor.Mechrevo;
 
@@ -19,10 +20,14 @@ public sealed class Metric
 
     internal void Update(float? value)
     {
-        Current = value;
-        if (value is not { } v)
+        // LHM 传感器无值时常返回 NaN 而非 null：不过滤会污染 min/max/avg 并把界面刷成 "NaN"
+        if (value is not { } v || float.IsNaN(v))
+        {
+            Current = null;
             return;
+        }
 
+        Current = value;
         Min = Min is null ? v : Math.Min(Min.Value, v);
         Max = Max is null ? v : Math.Max(Max.Value, v);
         _sum += v;
@@ -137,12 +142,21 @@ public sealed class MonitorCore : IDisposable
             }
         }
 
-        double tdp =
-            name.EndsWith("HX") || name.EndsWith("HK") ? 55.0 :
-            name.EndsWith("HS") || name.EndsWith("HQ") || name.EndsWith("H") ? 45.0 :
-            name.EndsWith("P") ? 28.0 :
-            name.EndsWith("U") ? 15.0 :
-            35.0;
+        // 从型号数字后提取后缀（如 8745H / 7945HX / 1360P）：LHM 的 CPU 名称常带
+        // "W/ RADEON 780M GRAPHICS" 之类的尾巴，直接 EndsWith 会永远落到默认值
+        double tdp = 35.0;
+        Match m = Regex.Match(name, @"(\d{2,5})(HX|HK|HS|HQ|H|U|P)\b");
+        if (m.Success)
+        {
+            tdp = m.Groups[2].Value switch
+            {
+                "HX" or "HK" => 55.0,
+                "HS" or "HQ" or "H" => 45.0,
+                "P" => 28.0,
+                "U" => 15.0,
+                _ => 35.0,
+            };
+        }
 
         return (tdp, Math.Round(tdp * 1.6), 3200, 4800);
     }

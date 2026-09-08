@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Windows.Threading;
-using LibreHardwareMonitor.Mechrevo;
 using Microsoft.Win32;
 using Drawing = System.Drawing;
 using WF = System.Windows.Forms;
@@ -22,6 +21,7 @@ public sealed class TrayController
     private readonly Dispatcher _uiDispatcher = System.Windows.Application.Current.Dispatcher;
     private readonly WF.NotifyIcon _icon;
     private TrayWidget _widget;
+    private (double Pe, double Pc, double Fe, double Fc) _thresholds;
     private System.Threading.Timer? _sampleTimer;
     private int _sampling;                     // 0 空闲 / 1 采样中
 
@@ -51,9 +51,13 @@ public sealed class TrayController
     /// <summary>启动：主题适配 + 托盘渲染窗口常驻显示 + 后台采样（无任何弹窗提示）。</summary>
     public void Start()
     {
-        // 按 CPU 配置设定状态色阈值（正常绿 / 偏高橙 / 超高红）
-        (double pe, double pc, double fe, double fc) = _core.GetThresholds();
-        _widget.SetThresholds(pe, pc, fe, fc);
+        // 按 CPU 配置设定状态色阈值（正常绿 / 偏高橙 / 超高红），自愈重建挂件时也要重挂
+        _thresholds = _core.GetThresholds();
+        _widget.SetThresholds(_thresholds.Pe, _thresholds.Pc, _thresholds.Fe, _thresholds.Fc);
+
+        // 配置里开了自启但计划任务缺失（旧版迁移 / 任务被手动删除）时补建
+        if (_settings.AutoStart && !_settings.IsAutoStartTaskInstalled())
+            _settings.ApplyAutoStart();
 
         _widget.ApplyTheme(IsLightSystemTheme());
         _widget.ShowWidget();
@@ -119,6 +123,7 @@ public sealed class TrayController
 
         try { _widget.Dispose(); } catch { /* 僵尸窗口清理失败可忽略 */ }
         _widget = new TrayWidget();
+        _widget.SetThresholds(_thresholds.Pe, _thresholds.Pc, _thresholds.Fe, _thresholds.Fc);
         _widget.ApplyTheme(IsLightSystemTheme());
         _widget.ShowWidget();
     }

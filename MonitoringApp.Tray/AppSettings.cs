@@ -67,6 +67,9 @@ public sealed class AppSettings
         }
     }
 
+    /// <summary>自启计划任务是否已存在（配置开了自启但任务缺失时调用方应补建）。</summary>
+    public bool IsAutoStartTaskInstalled() => RunSchTasks("/Query");
+
     /// <summary>按 <see cref="AutoStart"/> 创建或删除开机自启计划任务。
     /// 用计划任务（最高权限）而非 HKCU Run：本程序 requireAdministrator，
     /// HKCU Run 登录自启是非提权运行，读不到 MSR，功耗会一直显示 "--"；
