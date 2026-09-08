@@ -48,23 +48,19 @@ public sealed class MonitoringSnapshot
 /// <summary>
 /// 精简监控服务：每次 Read() 更新两项指标。
 /// · CPU 功耗：LHM CPU 传感器的 Package/Total Power；
-/// · 风扇转速：机械革命私有 ACPI WMI（PowerSwitchInterface），带 3 秒缓存降低 WMI 调用开销。
+/// · 风扇转速：机械革命私有 ACPI WMI（PowerSwitchInterface），每拍直读无值缓存（与控制中心读取方式一致）。
 /// 资源优化：CPU 硬件与功耗传感器对象跨更新稳定存在，首次找到后缓存引用，
 /// 每秒只做一次硬件 Update + 一次传感器取值，免去每秒枚举硬件树和传感器名字字符串匹配；
 /// 统计区加锁，保证后台采样线程与 UI 线程的"重置统计"互不踩踏。
 /// </summary>
 public sealed class MonitorCore : IDisposable
 {
-    // 风扇 WMI 轮询节流：与机械革命控制中心一致（其 updaterfan1 线程 sleep(1.5) 直读 WMI，逆向实锤）。
-    // 注意 1 秒采样粒度下实际节拍为 ~2 秒一读（1.5s 阈值 + 1s tick），介于原 3s 与 CC 的 1.5s 之间
-    private const double FanCacheSeconds = 1.5;
+    // 风扇无值缓存：与控制中心一致（其采集线程每 1.5s 直读 WMI，无缓存），我们按 1s 采样间隔每拍直读
 
     private readonly Computer _computer;
     private readonly MechrevoEcProvider _ec;
     private readonly MonitoringSnapshot _snapshot = new();
     private readonly object _statsLock = new();
-    private DateTime _lastFanRead = DateTime.MinValue;
-    private float? _cachedFanRpm;
     private IHardware? _cachedCpu;
     private ISensor? _cachedPowerSensor;
 
@@ -106,7 +102,7 @@ public sealed class MonitorCore : IDisposable
                 cpuPower = sensor.Value;
         }
 
-        float? fanRpm = ReadFanRpmCached();   // WMI 最慢，放在锁外
+        float? fanRpm = _ec.ReadFanRpm();   // WMI 最慢，放在锁外；与控制中心一致：每拍直读，无值缓存
 
         lock (_statsLock)
         {
@@ -149,17 +145,6 @@ public sealed class MonitorCore : IDisposable
             35.0;
 
         return (tdp, Math.Round(tdp * 1.6), 3200, 4800);
-    }
-
-    /// <summary>风扇转速（RPM），3 秒缓存内的重复读取直接返回上次结果。</summary>
-    private float? ReadFanRpmCached()
-    {
-        if ((DateTime.Now - _lastFanRead).TotalSeconds < FanCacheSeconds)
-            return _cachedFanRpm;
-
-        _cachedFanRpm = _ec.ReadFanRpm();
-        _lastFanRead = DateTime.Now;
-        return _cachedFanRpm;
     }
 
     /// <summary>首次发现 Package/Total 功耗传感器后缓存，之后直接读 Value（LHM 传感器对象跨更新稳定）。</summary>
