@@ -79,31 +79,5 @@ public sealed class MechrevoEcProvider : IDisposable
 
     private static float? ParseRpm(uint raw) => raw is > 0 and < Invalid ? raw : null;
 
-    /// <summary>硬件温度（°C）。<paramref name="hwTempType"/> = 1 为 CPU 温度。</summary>
-    public float? ReadTemperature(byte hwTempType = 1)
-    {
-        if (_ps == null)
-            return null;
-
-        try
-        {
-            ManagementBaseObject inParams = _ps.GetMethodParameters("GetHwTemp");
-            inParams["HwTempType"] = hwTempType;
-            ManagementBaseObject outParams = _ps.InvokeMethod("GetHwTemp", inParams, null);
-
-            if (outParams?["Temp"] is not null)
-            {
-                uint temp = Convert.ToUInt32(outParams["Temp"]);
-                return temp < Invalid ? temp : null;
-            }
-        }
-        catch
-        {
-            // WMI 读取失败：返回 null 降级。
-        }
-
-        return null;
-    }
-
     public void Dispose() => _ps?.Dispose();
 }

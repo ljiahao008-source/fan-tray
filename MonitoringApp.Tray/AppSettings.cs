@@ -10,9 +10,6 @@ public sealed class AppSettings
 {
     private static readonly string ConfigPath = Path.Combine(AppContext.BaseDirectory, "config.json");
 
-    public bool ShowCpuPower { get; set; } = true;
-    public bool ShowFanRpm { get; set; } = true;
-
     public int RefreshIntervalMs { get; set; } = 1000;
     public bool AutoStart { get; set; } = false;
 
