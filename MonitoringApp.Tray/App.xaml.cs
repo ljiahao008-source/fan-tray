@@ -11,14 +11,18 @@ public partial class App : System.Windows.Application
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
+        Trace("startup-enter");
         // 单实例：已有实例在跑时，先尝试结束它再接管（新版升级场景旧实例常驻托盘，
         // 直接静默退出会让用户觉得"双击没反应"）；仍失败才提示并退出
         _singleInstance = new Mutex(true, "MechrevoMonitorTray_SingleInstance", out bool createdNew);
+        Trace("mutex createdNew=" + createdNew);
         if (!createdNew)
         {
             TryKillOtherInstances();
+            Trace("takeover done");
             _singleInstance.Dispose();
             _singleInstance = new Mutex(true, "MechrevoMonitorTray_SingleInstance", out createdNew);
+            Trace("mutex2 createdNew=" + createdNew);
             if (!createdNew)
             {
                 System.Windows.MessageBox.Show(
@@ -28,7 +32,6 @@ public partial class App : System.Windows.Application
                 return;
             }
         }
-
         DispatcherUnhandledException += (_, ev) => { Log(ev.Exception); ev.Handled = true; };
         AppDomain.CurrentDomain.UnhandledException += (_, ev) => Log(ev.ExceptionObject as Exception);
         // WinForms 控件（NotifyIcon/菜单）回调里的异常走 ThreadException，不经过 WPF Dispatcher，
@@ -38,7 +41,9 @@ public partial class App : System.Windows.Application
 
         // 无主窗口：启动即常驻托盘，显式退出前不结束进程
         var tray = new TrayController();
+        Trace("tray ctor done");
         tray.Start();
+        Trace("tray started");
 
         // 资源优化：启动 60 秒后做一次带压缩的完整 GC。
         // 启动期（WPF 初始化/打开硬件）会产生一大坨临时对象，而平时每秒分配极少、
@@ -57,7 +62,10 @@ public partial class App : System.Windows.Application
                 try
                 {
                     if (p.Id != Environment.ProcessId)
+                    {
                         p.Kill();
+                        p.WaitForExit(3000);   // 等旧实例彻底退出、内核驱动句柄释放
+                    }
                 }
                 catch
                 {
@@ -69,8 +77,9 @@ public partial class App : System.Windows.Application
                 }
             }
 
-            // 等旧实例真正退出、释放互斥量
-            System.Threading.Thread.Sleep(800);
+            // 缓冲：旧实例持有的 MSR/EC 驱动服务此刻可能仍在卸载，
+            // 立刻 Open() 会撞上卸载竞态把硬件初始化卡死（v3.2.3 实测踩过）
+            System.Threading.Thread.Sleep(1500);
         }
         catch
         {
@@ -78,7 +87,7 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private static void Log(Exception? ex)
+    internal static void Log(Exception? ex)
     {
         if (ex == null)
             return;
@@ -87,6 +96,19 @@ public partial class App : System.Windows.Application
         {
             File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"),
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
+        }
+        catch
+        {
+            // 忽略
+        }
+    }
+
+    internal static void Trace(string msg)
+    {
+        try
+        {
+            File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "trace.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff} pid={Environment.ProcessId}] {msg}\n");
         }
         catch
         {

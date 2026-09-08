@@ -16,9 +16,13 @@ namespace MonitoringApp.Tray;
 /// </summary>
 public sealed class TrayController
 {
-    private readonly MonitorCore _core = new();
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly Dispatcher _uiDispatcher = System.Windows.Application.Current.Dispatcher;
+    private MonitorCore? _core;                // 惰性创建：Computer.Open() 可能被旧实例的驱动卸载卡住，绝不能卡 UI 线程
+    private readonly object _coreGate = new();
+    private int _coreFailCount;                // 连续失败计数，超过 3 次后每 5 拍重试一次
+    private int _firstTickDone;
+    private bool _thresholdsApplied;
     private readonly WF.NotifyIcon _icon;
     private TrayWidget _widget;
     private (double Pe, double Pc, double Fe, double Fc) _thresholds;
@@ -27,9 +31,11 @@ public sealed class TrayController
 
     public TrayController()
     {
+        App.Trace("tray ctor enter");
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
         _widget = new TrayWidget();
+        App.Trace("tray widget created");
 
         _icon = new WF.NotifyIcon
         {
@@ -37,6 +43,7 @@ public sealed class TrayController
             Visible = true,
             Text = "机械革命监控（精简版）",
         };
+        App.Trace("tray notifyicon created");
         try
         {
             if (Environment.ProcessPath is { } exe)
@@ -51,10 +58,6 @@ public sealed class TrayController
     /// <summary>启动：主题适配 + 托盘渲染窗口常驻显示 + 后台采样（无任何弹窗提示）。</summary>
     public void Start()
     {
-        // 按 CPU 配置设定状态色阈值（正常绿 / 偏高橙 / 超高红），自愈重建挂件时也要重挂
-        _thresholds = _core.GetThresholds();
-        _widget.SetThresholds(_thresholds.Pe, _thresholds.Pc, _thresholds.Fe, _thresholds.Fc);
-
         // 配置里开了自启但计划任务缺失（旧版迁移 / 任务被手动删除）时补建
         if (_settings.AutoStart && !_settings.IsAutoStartTaskInstalled())
             _settings.ApplyAutoStart();
@@ -62,6 +65,37 @@ public sealed class TrayController
         _widget.ApplyTheme(IsLightSystemTheme());
         _widget.ShowWidget();
         StartSampling();
+    }
+
+    /// <summary>后台线程取监控核心；首次调用才 new（可能耗时/卡在驱动打开），失败按拍退避重试。</summary>
+    private MonitorCore? GetCore()
+    {
+        if (_core != null)
+            return _core;
+
+        bool shouldTry = _coreFailCount < 3 || _coreFailCount % 5 == 0;
+        if (!shouldTry)
+            return null;
+
+        lock (_coreGate)
+        {
+            if (_core != null)
+                return _core;
+
+            try
+            {
+                MonitorCore core = new();
+                _core = core;
+                _coreFailCount = 0;
+                return core;
+            }
+            catch (Exception ex)
+            {
+                _coreFailCount++;
+                App.Log(ex);
+                return null;
+            }
+        }
     }
 
     private void StartSampling()
@@ -79,12 +113,29 @@ public sealed class TrayController
 
         try
         {
-            MonitoringSnapshot s = _core.Read();
+            MonitorCore? core = GetCore();
+            if (_coreFailCount == 0 && core != null && Volatile.Read(ref _firstTickDone) == 0)
+            {
+                Volatile.Write(ref _firstTickDone, 1);
+                App.Trace("first sample ok");
+            }
+
+            MonitoringSnapshot? s = core?.Read();
+
             BeginInvokeOnUi(() =>
             {
                 EnsureWidget();
-                _widget.Update(s.CpuPower, s.FanRpm);
-                UpdateToolTip(s);
+
+                if (core != null && !_thresholdsApplied)
+                {
+                    _thresholds = core.GetThresholds();
+                    _widget.SetThresholds(_thresholds.Pe, _thresholds.Pc, _thresholds.Fe, _thresholds.Fc);
+                    _thresholdsApplied = true;
+                }
+
+                _widget.Update(s?.CpuPower, s?.FanRpm);
+                if (s != null)
+                    UpdateToolTip(s);
             });
         }
         catch
@@ -133,7 +184,7 @@ public sealed class TrayController
         WF.ContextMenuStrip menu = new();
 
         menu.Items.Add("设置", null, (_, _) => OpenSettings());
-        menu.Items.Add("重置统计", null, (_, _) => _core.Reset());
+        menu.Items.Add("重置统计", null, (_, _) => _core?.Reset());
         menu.Items.Add(new WF.ToolStripSeparator());
 
         WF.ToolStripMenuItem autoStart = new("开机自启") { CheckOnClick = true, Checked = _settings.AutoStart };
@@ -202,7 +253,7 @@ public sealed class TrayController
         TryStep(() => { _icon.Visible = false; });
         TryStep(() => { _icon.Dispose(); });
         TryStep(() => _widget.Dispose());
-        TryStep(() => _core.Dispose());
+        TryStep(() => _core?.Dispose());
         System.Windows.Application.Current.Shutdown();
     }
 
