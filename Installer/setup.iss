@@ -37,7 +37,8 @@ Name: "autostart"; Description: "开机自动运行(&S)"; GroupDescription: "附
 
 [Files]
 Source: "..\MonitoringApp.Tray\bin\Release\net8.0-windows\win-x64\publish\MechrevoMonitorTray.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\使用说明.txt"; DestDir: "{app}"; Flags: ignoreversion
+; 说明文档取仓库内 README（CI checkout 里没有仓库外的使用说明.txt），安装后显示为 使用说明.txt
+Source: "..\README.md"; DestDir: "{app}"; DestName: "使用说明.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "CPU 功耗 / 风扇转速托盘监控"
