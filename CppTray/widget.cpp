@@ -223,15 +223,14 @@ void Widget::Render() {
         g.Clear(Color(0, 0, 0, 0));
 
         auto DrawPair = [&](int x0, int bw, const wchar_t* valueText, const wchar_t* label,
-                            const Metric& m, double elevated, double critical, bool hover, bool alignRight) {
+                            const Metric& m, double elevated, double critical, bool hover) {
             if (hover) {
                 SolidBrush hb(_hoverBack);
                 g.FillRectangle(&hb, (float)x0, 1.f, (float)bw, (float)(height - 2));
             }
 
-            // 靠内对齐：功耗右对齐、风扇左对齐，压缩两块文字之间留白（固定块宽下数字居中会拉开间距）
             StringFormat sf;
-            sf.SetAlignment(alignRight ? Gdiplus::StringAlignmentFar : Gdiplus::StringAlignmentNear);
+            sf.SetAlignment(Gdiplus::StringAlignmentCenter);   // 数值/标签各自块内居中
             RectF valRect((float)(x0 + kHoverPad), (float)(height / 2 - 12), (float)(bw - kHoverPad * 2), 18.f);
             Color vc = m.valid ? ValueColor(m.current, elevated, critical) : _labelColor;
             SolidBrush valBrush(vc);
@@ -255,9 +254,9 @@ void Widget::Render() {
             wcscpy_s(fbuf, L"--");
 
         DrawPair(0, _powerBlockW, pbuf, L"功耗", _power, _thr.powerElevated, _thr.powerCritical,
-                 _hovering && _hoverPower, /*alignRight=*/true);
+                 _hovering && _hoverPower);
         DrawPair(_powerBlockW + kPairGap, _fanBlockW, fbuf, L"风扇", _fan, _thr.fanElevated, _thr.fanCritical,
-                 _hovering && !_hoverPower, /*alignRight=*/false);
+                 _hovering && !_hoverPower);
     }
 
     BLENDFUNCTION blend{};
