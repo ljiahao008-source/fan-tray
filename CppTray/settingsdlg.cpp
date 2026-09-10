@@ -17,6 +17,7 @@ constexpr int kIdCtDay = 107;
 constexpr int kIdCtNight = 108;
 constexpr int kIdCtSunrise = 109;
 constexpr int kIdCtSunset = 116;
+constexpr int kIdCvCheck = 117;
 
 constexpr wchar_t kDlgClass[] = L"MechrevoSettingsDlgClass";
 
@@ -25,6 +26,7 @@ struct DlgCtx {
     HWND edit;
     HWND check;
     HWND bright;
+    HWND cvCheck;
     HWND ctEnable;
     HWND ctDay, ctNight, ctSunrise, ctSunset;
     HWND show[6] = {};
@@ -77,6 +79,7 @@ LRESULT CALLBACK DlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ctx->cfg->ShowMem = IsChecked(ctx->show[4]);
                 ctx->cfg->ShowNet = IsChecked(ctx->show[5]);
                 ctx->cfg->BrightnessKeysEnabled = IsChecked(ctx->bright);
+                ctx->cfg->ContrastVolumeKeysEnabled = IsChecked(ctx->cvCheck);
 
                 // 色温设置
                 ctx->cfg->ColorTempEnabled = IsChecked(ctx->ctEnable);
@@ -132,7 +135,7 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
 
     HWND dlg = CreateWindowExW(0, kDlgClass, L"机械革命监控 - 设置",
                                WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
-                               CW_USEDEFAULT, CW_USEDEFAULT, 362, 558,
+                               CW_USEDEFAULT, CW_USEDEFAULT, 362, 586,
                                parent, nullptr, hInst, &ctx);
     if (!dlg)
         return false;
@@ -203,49 +206,52 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
     SendMessageW(ctx.check, BM_SETCHECK, cfg.AutoStart ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // —— 分组四：屏幕亮度快捷键（DDC/CI，仅外接显示器）——
-    addGroup(L"屏幕亮度（DDC/CI，仅外接显示器）", 14, 294, 320, 56);
-    ctx.bright = addCtrl(L"BUTTON", L"启用快捷键调节亮度（Ctrl+Alt+↑ / ↓，每次 ±10%）",
+    addGroup(L"显示器快捷键（DDC/CI，仅外接显示器）", 14, 294, 320, 84);
+    ctx.bright = addCtrl(L"BUTTON", L"亮度：Ctrl+Alt+↑ / ↓（每次 ±10%）",
                          WS_TABSTOP | BS_AUTOCHECKBOX, 26, 316, 292, 22, kIdBrightCheck);
     SendMessageW(ctx.bright, BM_SETCHECK, cfg.BrightnessKeysEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+    ctx.cvCheck = addCtrl(L"BUTTON", L"对比度/音量：Ctrl+Alt+Shift+↑↓ / Ctrl+Alt+←→",
+                          WS_TABSTOP | BS_AUTOCHECKBOX, 26, 340, 292, 22, kIdCvCheck);
+    SendMessageW(ctx.cvCheck, BM_SETCHECK, cfg.ContrastVolumeKeysEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // —— 分组五：色温护眼（LightBulb 引擎）——
-    addGroup(L"色温护眼（LightBulb 引擎，日落变暖）", 14, 356, 320, 142);
+    addGroup(L"色温护眼（LightBulb 引擎，日落变暖）", 14, 384, 320, 142);
     wchar_t ctBuf[16] = {};
     ctx.ctEnable = addCtrl(L"BUTTON", L"启用自动色温（Ctrl+Alt+PgUp/PgDn 手动微调）",
-                           WS_TABSTOP | BS_AUTOCHECKBOX, 26, 378, 292, 22, kIdCtEnable);
+                           WS_TABSTOP | BS_AUTOCHECKBOX, 26, 406, 292, 22, kIdCtEnable);
     SendMessageW(ctx.ctEnable, BM_SETCHECK, cfg.ColorTempEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    addCtrl(L"STATIC", L"白天色温 (K)：", SS_LEFT, 26, 404, 110, 18, 0);
+    addCtrl(L"STATIC", L"白天色温 (K)：", SS_LEFT, 26, 432, 110, 18, 0);
     swprintf_s(ctBuf, L"%d", cfg.ColorTempDayK);
     ctx.ctDay = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ctBuf,
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
-                                150, 402, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtDay, hInst, nullptr);
+                                150, 430, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtDay, hInst, nullptr);
     if (uiFont) SendMessageW(ctx.ctDay, WM_SETFONT, (WPARAM)uiFont, TRUE);
 
-    addCtrl(L"STATIC", L"夜间色温 (K)：", SS_LEFT, 26, 430, 110, 18, 0);
+    addCtrl(L"STATIC", L"夜间色温 (K)：", SS_LEFT, 26, 458, 110, 18, 0);
     swprintf_s(ctBuf, L"%d", cfg.ColorTempNightK);
     ctx.ctNight = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ctBuf,
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
-                                  150, 428, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtNight, hInst, nullptr);
+                                  150, 456, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtNight, hInst, nullptr);
     if (uiFont) SendMessageW(ctx.ctNight, WM_SETFONT, (WPARAM)uiFont, TRUE);
 
-    addCtrl(L"STATIC", L"日出时间 (HH:MM)：", SS_LEFT, 26, 456, 120, 18, 0);
+    addCtrl(L"STATIC", L"日出时间 (HH:MM)：", SS_LEFT, 26, 484, 120, 18, 0);
     FormatHHMM(cfg.ColorTempSunriseMinutes, ctBuf, 16);
     ctx.ctSunrise = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ctBuf,
                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                                    150, 454, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtSunrise, hInst, nullptr);
+                                    150, 482, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtSunrise, hInst, nullptr);
     if (uiFont) SendMessageW(ctx.ctSunrise, WM_SETFONT, (WPARAM)uiFont, TRUE);
 
-    addCtrl(L"STATIC", L"日落时间 (HH:MM)：", SS_LEFT, 26, 482, 120, 18, 0);
+    addCtrl(L"STATIC", L"日落时间 (HH:MM)：", SS_LEFT, 26, 510, 120, 18, 0);
     FormatHHMM(cfg.ColorTempSunsetMinutes, ctBuf, 16);
     ctx.ctSunset = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ctBuf,
                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                                   150, 480, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtSunset, hInst, nullptr);
+                                   150, 508, 72, 22, dlg, (HMENU)(INT_PTR)kIdCtSunset, hInst, nullptr);
     if (uiFont) SendMessageW(ctx.ctSunset, WM_SETFONT, (WPARAM)uiFont, TRUE);
 
     // —— 按钮 ——
-    addCtrl(L"BUTTON", L"确定", WS_TABSTOP | BS_DEFPUSHBUTTON, 130, 510, 82, 28, kIdOk);
-    addCtrl(L"BUTTON", L"取消", WS_TABSTOP | BS_PUSHBUTTON, 226, 510, 82, 28, kIdCancel);
+    addCtrl(L"BUTTON", L"确定", WS_TABSTOP | BS_DEFPUSHBUTTON, 130, 538, 82, 28, kIdOk);
+    addCtrl(L"BUTTON", L"取消", WS_TABSTOP | BS_PUSHBUTTON, 226, 538, 82, 28, kIdCancel);
 
     SetFocus(ctx.edit);
 

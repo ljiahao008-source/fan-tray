@@ -18,6 +18,9 @@ struct AppConfig {
     bool BrightnessKeysEnabled = false;
     int  BrightnessStepPercent = 10;   // 每次步进（1~50）
 
+    // 显示器对比度/音量快捷键（Ctrl+Alt+Shift+↑↓ / Ctrl+Alt+←→）
+    bool ContrastVolumeKeysEnabled = false;
+
     // 色温护眼（LightBulb 引擎；默认关，设置里勾选开启）
     bool ColorTempEnabled = false;
     int  ColorTempDayK = 6500;         // 白天色温

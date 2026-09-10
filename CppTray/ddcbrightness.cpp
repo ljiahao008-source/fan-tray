@@ -283,18 +283,20 @@ void BrightnessController::InvalidateCache() {
 
 bool HotkeyManager::Install(HWND hostWindow, AdjustHandler onAdjust,
                             UINT modifiers, UINT vkUp, UINT vkDown,
-                            int stepPercent) {
+                            int stepPercent, int idUp, int idDown) {
     Uninstall();
     _hwnd    = hostWindow;
     _mods    = modifiers;
     _vkUp    = vkUp;
     _vkDown  = vkDown;
     _step    = stepPercent > 0 ? stepPercent : 10;
+    _idUp    = idUp;
+    _idDown  = idDown;
     _onAdjust = std::move(onAdjust);
     _lastTick = 0;
 
-    bool upOk = RegisterHotKey(hostWindow, kHotkeyUp, modifiers, vkUp);
-    bool dnOk = RegisterHotKey(hostWindow, kHotkeyDown, modifiers, vkDown);
+    bool upOk = RegisterHotKey(hostWindow, idUp, modifiers, vkUp);
+    bool dnOk = RegisterHotKey(hostWindow, idDown, modifiers, vkDown);
     if (!upOk || !dnOk) {
         Uninstall();   // 有一个被占用即整体回滚
         return false;
@@ -304,8 +306,8 @@ bool HotkeyManager::Install(HWND hostWindow, AdjustHandler onAdjust,
 
 void HotkeyManager::Uninstall() {
     if (_hwnd) {
-        UnregisterHotKey(_hwnd, kHotkeyUp);
-        UnregisterHotKey(_hwnd, kHotkeyDown);
+        UnregisterHotKey(_hwnd, _idUp);
+        UnregisterHotKey(_hwnd, _idDown);
     }
     _hwnd = nullptr;
     _onAdjust = nullptr;
@@ -315,9 +317,9 @@ bool HotkeyManager::HandleMessage(UINT msg, WPARAM wp) {
     if (msg != WM_HOTKEY || !_hwnd || !_onAdjust)
         return false;
     int step = 0;
-    if (wp == kHotkeyUp)
+    if (wp == _idUp)
         step = _step;
-    else if (wp == kHotkeyDown)
+    else if (wp == _idDown)
         step = -_step;
     else
         return false;

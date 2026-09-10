@@ -15,6 +15,7 @@
 #include "ddcbrightness.h"
 #include "colortemp.h"
 #include "mainwindow.h"
+#include "ddc.h"
 
 namespace {
 
@@ -45,6 +46,9 @@ App g_app;
 
 // 屏幕亮度快捷键（DDC/CI 模块，仅外接显示器）
 ddcb::HotkeyManager g_brightnessKeys;
+// 对比度 / 音量快捷键（完整 DDC/CI 模块）
+ddcb::HotkeyManager g_contrastKeys;
+ddcb::HotkeyManager g_volumeKeys;
 // 色温护眼（LightBulb 引擎）
 colortemp::ColorTemperatureManager g_colorTemp;
 
@@ -138,6 +142,34 @@ void ApplyBrightnessHotkeys(const AppConfig& cfg) {
         WriteLog(L"brightness hotkey register failed (occupied?)");
 }
 
+// 按配置安装/注销对比度/音量快捷键（完整 DDC/CI）
+void ApplyExtDdcHotkeys(const AppConfig& cfg) {
+    g_contrastKeys.Uninstall();
+    g_volumeKeys.Uninstall();
+    if (!cfg.ContrastVolumeKeysEnabled)
+        return;
+    bool ok = g_contrastKeys.Install(
+        g_app.mainHwnd,
+        [](int step) {
+            int n = ddc::Ddc::AdjustAll(1, step);
+            wchar_t log[96] = {};
+            swprintf_s(log, L"contrast adjust step=%d ok=%d", step, n);
+            WriteLog(log);
+        },
+        MOD_CONTROL | MOD_ALT | MOD_SHIFT, VK_UP, VK_DOWN, 10, 0xB021, 0xB022);
+    ok = g_volumeKeys.Install(
+        g_app.mainHwnd,
+        [](int step) {
+            int n = ddc::Ddc::AdjustAll(2, step);
+            wchar_t log[96] = {};
+            swprintf_s(log, L"volume adjust step=%d ok=%d", step, n);
+            WriteLog(log);
+        },
+        MOD_CONTROL | MOD_ALT, VK_LEFT, VK_RIGHT, 5, 0xB023, 0xB024) && ok;
+    if (!ok)
+        WriteLog(L"contrast/volume hotkey register failed (occupied?)");
+}
+
 // AppConfig → 色温模块配置
 colortemp::Settings ColorTempSettingsFromConfig(const AppConfig& cfg) {
     colortemp::Settings s;
@@ -168,8 +200,9 @@ void HandleAppAction(UINT id, HWND parent) {
                 g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
                 if (g_app.widget)
                     g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
-                mainwin::ApplyConfig(newCfg);                   // 主窗口显示项即时生效
+                mainwin::Rebuild();                             // 面板重建（显示器列表）
                 ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
+                ApplyExtDdcHotkeys(newCfg);                     // 对比度/音量快捷键即时生效
                 ApplyColorTemp(newCfg);                         // 色温设置即时生效
             }
             break;
@@ -254,13 +287,12 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (!g_app.thresholdsApplied) {
                     g_app.thr = g_app.core->GetThresholds();
                     g_app.widget->SetThresholds(g_app.thr);
-                    mainwin::SetThresholds(g_app.thr);
                     g_app.widget->ApplyConfig(g_app.cfg);
                     g_app.thresholdsApplied = true;
                 }
                 g_app.widget->Update(s);
-                mainwin::Update(s);   // 主窗口实时数值
             }
+            mainwin::Refresh();   // 面板数值（仅可见时刷新）
 
             // 托盘 tooltip：全部指标当前值（-- 表示该项无数据）
             auto cur = [](const Metric& m, const wchar_t* fmt) {
@@ -285,8 +317,10 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_CLOSE: {
             g_brightnessKeys.Uninstall();   // 注销亮度快捷键
+            g_contrastKeys.Uninstall();
+            g_volumeKeys.Uninstall();
             g_colorTemp.Stop();             // 恢复 gamma 并停色温线程
-            mainwin::DestroyWindowW();      // 销毁主监控窗口
+            mainwin::DestroyWindowW();      // 销毁面板窗口
             InterlockedExchange(&g_app.running, 0);
             // 采样线程可能在 WMI 阻塞：放宽等待；超时（线程未退出）则跳过 delete，进程退出由 OS 回收
             DWORD wait = WAIT_OBJECT_0;
@@ -313,9 +347,14 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostQuitMessage(0);
             return 0;
         case WM_HOTKEY:
-            // 亮度快捷键（Ctrl+Alt+↑/↓）→ 色温快捷键（Ctrl+Alt+PgUp/PgDn/Home）
+            // 亮度（Ctrl+Alt+↑/↓）→ 对比度（Ctrl+Alt+Shift+↑/↓）→ 音量（Ctrl+Alt+←/→）
             if (g_brightnessKeys.HandleMessage(msg, wp))
                 return 0;
+            if (g_contrastKeys.HandleMessage(msg, wp))
+                return 0;
+            if (g_volumeKeys.HandleMessage(msg, wp))
+                return 0;
+            // 色温（Ctrl+Alt+PgUp/PgDn/Home）
             if (g_colorTemp.HandleHotkey(msg, wp))
                 return 0;
             break;
@@ -415,11 +454,11 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     g_app.tray = new TrayIcon();
     g_app.tray->Create(g_app.mainHwnd, hInst);
 
-    mainwin::Create(hInst);                        // 主交互窗口（隐藏，双击托盘/菜单打开）
+    mainwin::Create(hInst);                        // 显示器控制面板（隐藏，双击托盘/菜单打开）
     mainwin::SetHost(g_app.mainHwnd);              // 按钮动作转发到宿主
-    mainwin::ApplyConfig(g_app.cfg);
 
-    ApplyBrightnessHotkeys(g_app.cfg);   // 按配置安装亮度快捷键（DDC/CI，仅外接显示器）
+    ApplyBrightnessHotkeys(g_app.cfg);   // 亮度快捷键（DDC/CI）
+    ApplyExtDdcHotkeys(g_app.cfg);       // 对比度/音量快捷键（DDC/CI）
     ApplyColorTemp(g_app.cfg);           // 色温配置就位
     g_colorTemp.Start(g_app.mainHwnd);   // 启动色温线程（每秒按调度应用 gamma）
 

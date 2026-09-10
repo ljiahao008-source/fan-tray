@@ -57,7 +57,8 @@ public:
     bool Install(HWND hostWindow, AdjustHandler onAdjust,
                  UINT modifiers = MOD_CONTROL | MOD_ALT,
                  UINT vkUp = VK_UP, UINT vkDown = VK_DOWN,
-                 int  stepPercent = 10);
+                 int  stepPercent = 10,
+                 int  idUp = kHotkeyUp, int idDown = kHotkeyDown);
 
     void Uninstall();                       // 注销两个热键
 
@@ -71,6 +72,7 @@ private:
     HWND _hwnd = nullptr;
     UINT _mods = 0, _vkUp = 0, _vkDown = 0;
     int  _step = 10;
+    int  _idUp = kHotkeyUp, _idDown = kHotkeyDown;
     AdjustHandler _onAdjust;
     ULONGLONG _lastTick = 0;   // 节流基准（100 ms）
 };

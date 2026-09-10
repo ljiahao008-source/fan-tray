@@ -113,6 +113,7 @@ AppConfig LoadConfig() {
     JsonBool(s, L"ShowNet", &cfg.ShowNet);
     JsonBool(s, L"BrightnessKeysEnabled", &cfg.BrightnessKeysEnabled);
     JsonInt(s, L"BrightnessStepPercent", &cfg.BrightnessStepPercent);
+    JsonBool(s, L"ContrastVolumeKeysEnabled", &cfg.ContrastVolumeKeysEnabled);
     JsonBool(s, L"ColorTempEnabled", &cfg.ColorTempEnabled);
     JsonInt(s, L"ColorTempDayK", &cfg.ColorTempDayK);
     JsonInt(s, L"ColorTempNightK", &cfg.ColorTempNightK);
@@ -148,6 +149,7 @@ bool SaveConfig(const AppConfig& cfg) {
                L"  \"ShowCpuUsage\": %s,\r\n  \"ShowCpuTemp\": %s,\r\n"
                L"  \"ShowMem\": %s,\r\n  \"ShowNet\": %s,\r\n"
                L"  \"BrightnessKeysEnabled\": %s,\r\n  \"BrightnessStepPercent\": %d,\r\n"
+               L"  \"ContrastVolumeKeysEnabled\": %s,\r\n"
                L"  \"ColorTempEnabled\": %s,\r\n  \"ColorTempDayK\": %d,\r\n"
                L"  \"ColorTempNightK\": %d,\r\n  \"ColorTempSunriseMinutes\": %d,\r\n"
                L"  \"ColorTempSunsetMinutes\": %d,\r\n  \"ColorTempTransitionMinutes\": %d,\r\n"
@@ -162,6 +164,7 @@ bool SaveConfig(const AppConfig& cfg) {
                cfg.ShowNet ? L"true" : L"false",
                cfg.BrightnessKeysEnabled ? L"true" : L"false",
                cfg.BrightnessStepPercent,
+               cfg.ContrastVolumeKeysEnabled ? L"true" : L"false",
                cfg.ColorTempEnabled ? L"true" : L"false",
                cfg.ColorTempDayK,
                cfg.ColorTempNightK,
