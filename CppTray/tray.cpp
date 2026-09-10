@@ -16,9 +16,11 @@ bool TrayIcon::Create(HWND hwnd, HINSTANCE hInst) {
 
     // 菜单
     _menu = CreatePopupMenu();
+    AppendMenuW(_menu, MF_STRING, kMenuOpenMain, L"打开主窗口");
+    AppendMenuW(_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(_menu, MF_STRING, kMenuSettings, L"设置");
-    AppendMenuW(_menu, MF_STRING, kMenuLockScreen, L"锁屏设置…");
     AppendMenuW(_menu, MF_STRING, kMenuReset, L"重置统计");
+    AppendMenuW(_menu, MF_STRING, kMenuLockScreen, L"锁屏设置…");
     AppendMenuW(_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(_menu, MF_STRING, kMenuAutoStart, L"开机自启");
     AppendMenuW(_menu, MF_SEPARATOR, 0, nullptr);

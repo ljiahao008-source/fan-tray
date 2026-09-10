@@ -8,6 +8,7 @@
 constexpr UINT kTrayCallbackMsg = WM_APP + 10;
 
 // 菜单项 ID（main.cpp 的 TrayMenuCallback 使用）
+constexpr UINT kMenuOpenMain = 0;    // 打开主窗口
 constexpr UINT kMenuSettings = 1;
 constexpr UINT kMenuReset = 2;
 constexpr UINT kMenuAutoStart = 3;

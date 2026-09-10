@@ -14,12 +14,14 @@
 #include "lockscreendlg.h"
 #include "ddcbrightness.h"
 #include "colortemp.h"
+#include "mainwindow.h"
 
 namespace {
 
 constexpr wchar_t kMainClass[] = L"MechrevoMonitorTrayMainClass";
 constexpr wchar_t kMutexName[] = L"MechrevoMonitorTray_SingleInstance";
 constexpr UINT kSampleMsg = WM_APP + 11;
+constexpr UINT_PTR kTrayMenuTimer = 1;   // 托盘单击→菜单的延迟判定（等双击）
 
 struct App {
     HINSTANCE hInst = nullptr;
@@ -190,10 +192,26 @@ DWORD WINAPI SampleThreadProc(LPVOID p) {
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case kTrayCallbackMsg: {
-            if (LOWORD(lp) == WM_RBUTTONUP)
+            switch (LOWORD(lp)) {
+                case WM_RBUTTONUP:
+                    g_app.tray->ShowMenu(hwnd);
+                    break;
+                case WM_LBUTTONUP:
+                    // 单击：延迟弹菜单（等待双击判定，避免双击时菜单闪一下）
+                    SetTimer(hwnd, kTrayMenuTimer, GetDoubleClickTime(), nullptr);
+                    break;
+                case WM_LBUTTONDBLCLK:
+                    KillTimer(hwnd, kTrayMenuTimer);
+                    mainwin::Show();   // 双击打开主窗口
+                    break;
+            }
+            return 0;
+        }
+        case WM_TIMER: {
+            if (wp == kTrayMenuTimer) {
+                KillTimer(hwnd, kTrayMenuTimer);
                 g_app.tray->ShowMenu(hwnd);
-            else if (LOWORD(lp) == WM_LBUTTONDBLCLK)
-                g_app.tray->ShowMenu(hwnd);
+            }
             return 0;
         }
         case kSampleMsg: {
@@ -206,10 +224,12 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (!g_app.thresholdsApplied) {
                     g_app.thr = g_app.core->GetThresholds();
                     g_app.widget->SetThresholds(g_app.thr);
+                    mainwin::SetThresholds(g_app.thr);
                     g_app.widget->ApplyConfig(g_app.cfg);
                     g_app.thresholdsApplied = true;
                 }
                 g_app.widget->Update(s);
+                mainwin::Update(s);   // 主窗口实时数值
             }
 
             // 托盘 tooltip：全部指标当前值（-- 表示该项无数据）
@@ -236,6 +256,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CLOSE: {
             g_brightnessKeys.Uninstall();   // 注销亮度快捷键
             g_colorTemp.Stop();             // 恢复 gamma 并停色温线程
+            mainwin::DestroyWindowW();      // 销毁主监控窗口
             InterlockedExchange(&g_app.running, 0);
             // 采样线程可能在 WMI 阻塞：放宽等待；超时（线程未退出）则跳过 delete，进程退出由 OS 回收
             DWORD wait = WAIT_OBJECT_0;
@@ -285,6 +306,9 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // —— 托盘菜单回调（tray.cpp 通过 extern "C" 声明调用）——
 extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
     switch (id) {
+        case kMenuOpenMain:
+            mainwin::Show();
+            break;
         case kMenuSettings: {
             AppConfig newCfg = g_app.cfg;
             if (ShowSettingsDialog(hwnd, newCfg)) {
@@ -293,6 +317,7 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
                 g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
                 if (g_app.widget)
                     g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
+                mainwin::ApplyConfig(newCfg);                   // 主窗口显示项即时生效
                 ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
                 ApplyColorTemp(newCfg);                         // 色温设置即时生效
             }
@@ -367,6 +392,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
     g_app.tray = new TrayIcon();
     g_app.tray->Create(g_app.mainHwnd, hInst);
+
+    mainwin::Create(hInst);                        // 主监控窗口（隐藏，双击托盘/菜单打开）
+    mainwin::ApplyConfig(g_app.cfg);
 
     ApplyBrightnessHotkeys(g_app.cfg);   // 按配置安装亮度快捷键（DDC/CI，仅外接显示器）
     ApplyColorTemp(g_app.cfg);           // 色温配置就位
