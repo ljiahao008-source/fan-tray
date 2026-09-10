@@ -30,7 +30,7 @@ constexpr wchar_t kTipClass[] = L"MechrevoTrayTipClass";
 constexpr wchar_t kThemeKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 
 constexpr int kGapPx = 2;          // 与托盘角落间距
-constexpr int kPairGap = 12;       // 功耗/风扇两块的间距（含内边距）
+constexpr int kPairGap = 2;        // 功耗/风扇两块的间距（与原版 rightMargin=2 一致，文字视觉间距 5+2+5=12px）
 constexpr int kHoverPad = 5;       // 悬停热区余量
 constexpr int kTipW = 214, kTipH = 88;
 
