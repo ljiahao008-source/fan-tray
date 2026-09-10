@@ -1,0 +1,321 @@
+// 机械革命监控 C++ 版主入口（对照 App.xaml.cs + TrayController.cs）
+// 单实例 + 隐藏主窗口 + 托盘 + 任务栏嵌入 + 后台采样线程
+
+#include <windows.h>
+#include <tlhelp32.h>
+#include <string>
+
+#include "tray.h"
+#include "widget.h"
+#include "monitor.h"
+#include "config.h"
+#include "autostart.h"
+#include "settingsdlg.h"
+
+namespace {
+
+constexpr wchar_t kMainClass[] = L"MechrevoMonitorTrayMainClass";
+constexpr wchar_t kMutexName[] = L"MechrevoMonitorTray_SingleInstance";
+constexpr UINT kSampleMsg = WM_APP + 11;
+
+struct App {
+    HINSTANCE hInst = nullptr;
+    HWND mainHwnd = nullptr;
+    Widget* widget = nullptr;
+    TrayIcon* tray = nullptr;
+    MonitorCore* core = nullptr;
+    AppConfig cfg;
+    CRITICAL_SECTION snapLock;
+    Metric snapPower, snapFan;
+    volatile LONG running = 1;
+    volatile LONG intervalMs = 1000;   // 采样间隔（设置改动即时生效，免线程重启竞态）
+    HANDLE sampleThread = nullptr;
+    UINT taskbarCreatedMsg = 0;
+    bool thresholdsApplied = false;
+    Thresholds thr;
+    HANDLE mutex = nullptr;
+};
+
+App g_app;
+
+// 崩溃兜底：写 crash.log
+LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
+    (void)info;
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    std::wstring p = path;
+    size_t pos = p.find_last_of(L"\\/");
+    if (pos != std::wstring::npos)
+        p.resize(pos + 1);
+    p += L"crash.log";
+
+    HANDLE h = CreateFileW(p.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        SetFilePointer(h, 0, nullptr, FILE_END);
+        wchar_t line[128] = {};
+        swprintf_s(line, L"[crash] %llu\n", (unsigned long long)GetTickCount64());
+        DWORD w = 0;
+        WriteFile(h, line, (DWORD)(wcslen(line) * sizeof(wchar_t)), &w, nullptr);
+        CloseHandle(h);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// 枚举并结束其他同名进程（升级场景旧实例常驻）
+void KillOtherInstances() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    DWORD myPid = GetCurrentProcessId();
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID == myPid)
+                continue;
+            if (_wcsicmp(pe.szExeFile, L"MechrevoMonitorTray.exe") == 0) {
+                HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                if (h) {
+                    TerminateProcess(h, 0);
+                    CloseHandle(h);
+                }
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    Sleep(1500);   // 等旧实例释放驱动句柄（MSR 卸载竞态）
+}
+
+std::wstring ExeDir() {
+    wchar_t buf[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring p = buf;
+    size_t pos = p.find_last_of(L"\\/");
+    if (pos != std::wstring::npos)
+        p.resize(pos + 1);
+    return p;
+}
+
+void WriteLog(const wchar_t* msg) {
+    HANDLE h = CreateFileW((ExeDir() + L"trace.log").c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    SetFilePointer(h, 0, nullptr, FILE_END);
+    wchar_t line[512] = {};
+    swprintf_s(line, L"[%llu] %s\n", (unsigned long long)GetTickCount64(), msg);
+    DWORD w = 0;
+    WriteFile(h, line, (DWORD)(wcslen(line) * sizeof(wchar_t)), &w, nullptr);
+    CloseHandle(h);
+}
+
+DWORD WINAPI SampleThreadProc(LPVOID p);
+
+// —— 采样线程（后台）：读硬件 → 快照 → 通知 UI ——
+DWORD WINAPI SampleThreadProc(LPVOID p) {
+    App* app = (App*)p;
+    bool inited = false;
+    while (InterlockedCompareExchange(&app->running, 1, 1)) {
+        if (!inited) {
+            if (app->core->Init()) {
+                inited = true;
+                WriteLog(L"sample: core init ok");
+            } else {
+                WriteLog(L"sample: core init failed, retry");
+                Sleep(1000);
+                continue;
+            }
+        }
+
+        Metric power, fan;
+        app->core->Sample(power, fan);
+
+        EnterCriticalSection(&app->snapLock);
+        app->snapPower = power;
+        app->snapFan = fan;
+        LeaveCriticalSection(&app->snapLock);
+
+        PostMessage(app->mainHwnd, kSampleMsg, 0, 0);
+        Sleep((DWORD)app->intervalMs);   // 动态读取，设置改动即时生效
+    }
+    return 0;
+}
+
+// —— 主窗口（隐藏）：托盘回调 + 采样结果 + TaskbarCreated ——
+LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case kTrayCallbackMsg: {
+            if (LOWORD(lp) == WM_RBUTTONUP)
+                g_app.tray->ShowMenu(hwnd);
+            else if (LOWORD(lp) == WM_LBUTTONDBLCLK)
+                g_app.tray->ShowMenu(hwnd);
+            return 0;
+        }
+        case kSampleMsg: {
+            Metric power, fan;
+            EnterCriticalSection(&g_app.snapLock);
+            power = g_app.snapPower;
+            fan = g_app.snapFan;
+            LeaveCriticalSection(&g_app.snapLock);
+
+            if (g_app.widget && g_app.core) {
+                if (!g_app.thresholdsApplied) {
+                    g_app.thr = g_app.core->GetThresholds();
+                    g_app.widget->SetThresholds(g_app.thr);
+                    g_app.thresholdsApplied = true;
+                }
+                g_app.widget->Update(power, fan);
+            }
+
+            // ToolTip：功耗 + 风扇当前/平均
+            wchar_t tip[128] = {};
+            swprintf_s(tip, L"功耗 %.1f W · 平均 %.1f\n风扇 %.0f RPM · 平均 %.0f",
+                       power.valid ? (double)power.current : -1.0,
+                       power.valid ? (double)power.avg : -1.0,
+                       fan.valid ? (double)fan.current : -1.0,
+                       fan.valid ? (double)fan.avg : -1.0);
+            if (g_app.tray)
+                g_app.tray->SetTooltip(tip);
+            return 0;
+        }
+        case WM_CLOSE: {
+            InterlockedExchange(&g_app.running, 0);
+            // 采样线程可能在 WMI 阻塞：放宽等待；超时（线程未退出）则跳过 delete，进程退出由 OS 回收
+            DWORD wait = WAIT_OBJECT_0;
+            if (g_app.sampleThread) {
+                wait = WaitForSingleObject(g_app.sampleThread, 15000);
+                CloseHandle(g_app.sampleThread);
+                g_app.sampleThread = nullptr;
+            }
+            if (g_app.tray)
+                g_app.tray->Remove();
+            if (g_app.widget)
+                g_app.widget->Dispose();
+            if (g_app.core && wait == WAIT_OBJECT_0)
+                delete g_app.core;
+            delete g_app.widget;
+            delete g_app.tray;
+            g_app.core = nullptr;
+            g_app.widget = nullptr;
+            g_app.tray = nullptr;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
+        default:
+            if (msg == g_app.taskbarCreatedMsg) {
+                // explorer 重启：任务栏重建后重新嵌入
+                if (g_app.widget)
+                    g_app.widget->Embed();
+                return 0;
+            }
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+}  // namespace
+
+// —— 托盘菜单回调（tray.cpp 通过 extern "C" 声明调用）——
+extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
+    switch (id) {
+        case kMenuSettings: {
+            AppConfig newCfg = g_app.cfg;
+            if (ShowSettingsDialog(hwnd, newCfg)) {
+                g_app.cfg = newCfg;
+                SaveConfig(newCfg);
+                g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
+            }
+            break;
+        }
+        case kMenuReset:
+            if (g_app.core)
+                g_app.core->ResetStats();
+            break;
+        case kMenuAutoStart: {
+            bool enable = !checked;   // 菜单勾选状态取反 = 目标状态
+            if (ApplyAutoStart(enable)) {
+                g_app.cfg.AutoStart = enable;
+                SaveConfig(g_app.cfg);
+            } else {
+                MessageBoxW(hwnd, L"开机自启设置失败：创建计划任务需要管理员权限。",
+                            L"机械革命监控", MB_OK | MB_ICONWARNING);
+            }
+            break;
+        }
+        case kMenuExit:
+            PostMessage(g_app.mainHwnd, WM_CLOSE, 0, 0);
+            break;
+    }
+}
+
+int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
+    SetUnhandledExceptionFilter(CrashFilter);
+    WriteLog(L"startup-enter");
+
+    // 单实例
+    g_app.mutex = CreateMutexW(nullptr, TRUE, kMutexName);
+    if (!g_app.mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+        KillOtherInstances();
+        g_app.mutex = CreateMutexW(nullptr, TRUE, kMutexName);
+        if (!g_app.mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+            MessageBoxW(nullptr, L"机械革命监控已在运行（任务栏右下角托盘图标）。",
+                        L"机械革命监控", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+    }
+    WriteLog(L"mutex ok");
+
+    g_app.hInst = hInst;
+    InitializeCriticalSection(&g_app.snapLock);
+
+    // 配置
+    g_app.cfg = LoadConfig();
+    if (g_app.cfg.AutoStart && !IsAutoStartTaskInstalled())
+        ApplyAutoStart(true);
+
+    // 注册主窗口类
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = MainWndProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = kMainClass;
+    RegisterClassW(&wc);
+    g_app.mainHwnd = CreateWindowExW(0, kMainClass, L"MechrevoMonitorTray",
+                                     WS_OVERLAPPED, 0, 0, 0, 0,
+                                     nullptr, nullptr, hInst, nullptr);
+    g_app.taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
+
+    // 组件
+    g_app.core = new MonitorCore();
+    g_app.widget = new Widget();
+    if (!g_app.widget->Create(hInst)) {
+        MessageBoxW(nullptr, L"窗口初始化失败。", L"机械革命监控", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    g_app.tray = new TrayIcon();
+    g_app.tray->Create(g_app.mainHwnd, hInst);
+
+    // 启动采样线程
+    g_app.intervalMs = g_app.cfg.RefreshIntervalMs;
+    InterlockedExchange(&g_app.running, 1);
+    g_app.sampleThread = CreateThread(nullptr, 0, &SampleThreadProc, &g_app, 0, nullptr);
+
+    WriteLog(L"startup done");
+
+    // 消息循环
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    // 清理
+    DeleteCriticalSection(&g_app.snapLock);
+    if (g_app.mutex)
+        ReleaseMutex(g_app.mutex);
+    WriteLog(L"exit");
+    return 0;
+}

@@ -1,0 +1,14 @@
+# C++ 构建产物
+*.obj
+*.res
+app.res
+
+# 可执行文件（通过 GitHub Release 分发）
+MechrevoMonitorTray.exe
+
+# 运行日志
+*.log
+trace.log
+crash.log
+pawnio_dbg.log
+widget_dbg.log

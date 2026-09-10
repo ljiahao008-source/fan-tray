@@ -1,0 +1,13 @@
+// 机械革命监控 C++ 版资源脚本
+// IntelMSR.bin / AMDFamily17.bin：PawnIO 固件模块（来自 LibreHardwareMonitor，MPL-2.0）
+
+#define IDR_INTELMSR    101
+#define IDI_APPICON     102
+#define IDR_AMDFAMILY17 103
+
+// 程序清单：requireAdministrator + PerMonitorV2 DPI（资源 ID 1 = 进程清单）
+1 24 "app.manifest"
+
+IDR_INTELMSR    RCDATA "IntelMSR.bin"
+IDR_AMDFAMILY17 RCDATA "AMDFamily17.bin"
+IDI_APPICON     ICON   "app.ico"
