@@ -217,7 +217,9 @@ void Widget::Render() {
     {
         Graphics g(memDC);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+        // ClearType 依赖不透明背景做子像素抗锯齿，在透明分层窗口上会渲染出彩色边缘/马赛克；
+        // 透明表面必须用灰度抗锯齿
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
         g.Clear(Color(0, 0, 0, 0));
 
         auto DrawPair = [&](int x0, int bw, const wchar_t* valueText, const wchar_t* label,
@@ -510,7 +512,7 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             {
                 Graphics g(memDC);
                 g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-                g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+                g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);   // 透明表面用灰度抗锯齿（ClearType 会糊）
                 g.Clear(Color(0, 0, 0, 0));
 
                 // 深色圆角卡片
