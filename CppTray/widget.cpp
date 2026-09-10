@@ -30,8 +30,8 @@ constexpr wchar_t kTipClass[] = L"MechrevoTrayTipClass";
 constexpr wchar_t kThemeKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 
 constexpr int kGapPx = 2;          // 与托盘角落间距
-constexpr int kPairGap = 2;        // 功耗/风扇两块的间距（与原版 rightMargin=2 一致，文字视觉间距 5+2+5=12px）
-constexpr int kHoverPad = 5;       // 悬停热区余量
+constexpr int kPairGap = 1;        // 功耗/风扇两块的间距
+constexpr int kHoverPad = 3;       // 悬停热区余量
 constexpr int kTipW = 214, kTipH = 88;
 
 Color MakeColor(BYTE a, BYTE r, BYTE g, BYTE b) { return Color(a, r, g, b); }
@@ -223,14 +223,15 @@ void Widget::Render() {
         g.Clear(Color(0, 0, 0, 0));
 
         auto DrawPair = [&](int x0, int bw, const wchar_t* valueText, const wchar_t* label,
-                            const Metric& m, double elevated, double critical, bool hover) {
+                            const Metric& m, double elevated, double critical, bool hover, bool alignRight) {
             if (hover) {
                 SolidBrush hb(_hoverBack);
                 g.FillRectangle(&hb, (float)x0, 1.f, (float)bw, (float)(height - 2));
             }
 
+            // 靠内对齐：功耗右对齐、风扇左对齐，压缩两块文字之间留白（固定块宽下数字居中会拉开间距）
             StringFormat sf;
-            sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+            sf.SetAlignment(alignRight ? Gdiplus::StringAlignmentFar : Gdiplus::StringAlignmentNear);
             RectF valRect((float)(x0 + kHoverPad), (float)(height / 2 - 12), (float)(bw - kHoverPad * 2), 18.f);
             Color vc = m.valid ? ValueColor(m.current, elevated, critical) : _labelColor;
             SolidBrush valBrush(vc);
@@ -254,9 +255,9 @@ void Widget::Render() {
             wcscpy_s(fbuf, L"--");
 
         DrawPair(0, _powerBlockW, pbuf, L"功耗", _power, _thr.powerElevated, _thr.powerCritical,
-                 _hovering && _hoverPower);
+                 _hovering && _hoverPower, /*alignRight=*/true);
         DrawPair(_powerBlockW + kPairGap, _fanBlockW, fbuf, L"风扇", _fan, _thr.fanElevated, _thr.fanCritical,
-                 _hovering && !_hoverPower);
+                 _hovering && !_hoverPower, /*alignRight=*/false);
     }
 
     BLENDFUNCTION blend{};
