@@ -168,34 +168,57 @@ void Widget::Dispose() {
     }
 }
 
-void Widget::Update(const Metric& power, const Metric& fan) {
+void Widget::Update(const SampleSet& s) {
     if (!_hwnd)
         return;
     if (!_embedded && !Embed())
         return;
 
-    _power = power;
-    _fan = fan;
+    _metrics[(int)ItemKind::Power] = s.power;
+    _metrics[(int)ItemKind::Fan] = s.fan;
+    _metrics[(int)ItemKind::CpuUsage] = s.cpuUsage;
+    _metrics[(int)ItemKind::CpuTemp] = s.cpuTemp;
+    _metrics[(int)ItemKind::Mem] = s.mem;
+    _metrics[(int)ItemKind::Net] = s.netDown;
+    _netUp = s.netUp.valid ? s.netUp.current : 0.f;
+    _netUpValid = s.netUp.valid;
     _hasData = true;
 
     // 60 拍滚动历史（供悬浮窗趋势图）；无效拍沿用上一值保持曲线连续
-    if (power.valid)
-        _powerHist.push_back(power.current);
-    else if (!_powerHist.empty())
-        _powerHist.push_back(_powerHist.back());
-    if (_powerHist.size() > 60)
-        _powerHist.erase(_powerHist.begin());
-    if (fan.valid)
-        _fanHist.push_back(fan.current);
-    else if (!_fanHist.empty())
-        _fanHist.push_back(_fanHist.back());
-    if (_fanHist.size() > 60)
-        _fanHist.erase(_fanHist.begin());
+    for (int i = 0; i < kItemCount; i++) {
+        const Metric& m = _metrics[i];
+        if (m.valid)
+            _hist[i].push_back(m.current);
+        else if (!_hist[i].empty())
+            _hist[i].push_back(_hist[i].back());
+        if (_hist[i].size() > 60)
+            _hist[i].erase(_hist[i].begin());
+    }
 
     if (_tipHwnd && IsWindowVisible(_tipHwnd))
         InvalidateRect(_tipHwnd, nullptr, FALSE);   // 悬停时趋势图随采样实时刷新
 
     Render();
+}
+
+void Widget::ApplyConfig(const AppConfig& cfg) {
+    _items[(int)ItemKind::Power].visible = cfg.ShowPower;
+    _items[(int)ItemKind::Fan].visible = cfg.ShowFan;
+    _items[(int)ItemKind::CpuUsage].visible = cfg.ShowCpuUsage;
+    _items[(int)ItemKind::CpuTemp].visible = cfg.ShowCpuTemp;
+    _items[(int)ItemKind::Mem].visible = cfg.ShowMem;
+    _items[(int)ItemKind::Net].visible = cfg.ShowNet;
+
+    // 防呆：全部取消勾选时兜底显示功耗，避免零宽窗口
+    bool any = false;
+    for (int i = 0; i < kItemCount; i++)
+        any = any || _items[i].visible;
+    if (!any)
+        _items[(int)ItemKind::Power].visible = true;
+
+    HideTip();   // 布局将变，先收卡片
+    if (_hasData)
+        Render();
 }
 
 void Widget::ApplyTheme(bool light) {
@@ -214,6 +237,120 @@ Color Widget::ValueColor(float v, double elevated, double critical) const {
     return v <= critical ? _sevOrange : _sevRed;
 }
 
+const wchar_t* Widget::ItemLabel(int idx) {
+    switch ((ItemKind)idx) {
+        case ItemKind::Power: return L"功耗";
+        case ItemKind::Fan: return L"风扇";
+        case ItemKind::CpuUsage: return L"占用";
+        case ItemKind::CpuTemp: return L"温度";
+        case ItemKind::Mem: return L"内存";
+        case ItemKind::Net: return L"网速";
+        default: return L"";
+    }
+}
+
+const wchar_t* Widget::ItemTitle(int idx) {
+    switch ((ItemKind)idx) {
+        case ItemKind::Power: return L"CPU 功耗";
+        case ItemKind::Fan: return L"风扇转速";
+        case ItemKind::CpuUsage: return L"CPU 占用";
+        case ItemKind::CpuTemp: return L"CPU 温度";
+        case ItemKind::Mem: return L"内存占用";
+        case ItemKind::Net: return L"网络速度（下行/上行）";
+        default: return L"";
+    }
+}
+
+const wchar_t* Widget::ItemUnit(int idx) {
+    switch ((ItemKind)idx) {
+        case ItemKind::Power: return L"W";
+        case ItemKind::Fan: return L"RPM";
+        case ItemKind::CpuUsage: return L"%";
+        case ItemKind::CpuTemp: return L"°C";
+        case ItemKind::Mem: return L"%";
+        case ItemKind::Net: return L"KB/s";
+        default: return L"";
+    }
+}
+
+// 速率格式化：<1000 KB/s 显示整数 KB/s，≥1000 显示 M（1 位小数）
+static void FmtSpeed(float kb, wchar_t* buf, size_t cch) {
+    if (kb >= 1024.f)
+        swprintf_s(buf, cch, L"%.1fM", (double)(kb / 1024.f));
+    else if (kb >= 10.f)
+        swprintf_s(buf, cch, L"%.0f", (double)kb);
+    else
+        swprintf_s(buf, cch, L"%.1f", (double)kb);
+}
+
+void Widget::FormatValue(int idx, const Metric& m, float netUp, wchar_t* buf, size_t cch) {
+    if (!m.valid) {
+        wcscpy_s(buf, cch, L"--");
+        return;
+    }
+    switch ((ItemKind)idx) {
+        case ItemKind::Power:
+            swprintf_s(buf, cch, L"%.1f", (double)m.current);   // 托盘窗口不带单位
+            break;
+        case ItemKind::Fan:
+        case ItemKind::CpuUsage:
+        case ItemKind::CpuTemp:
+        case ItemKind::Mem:
+            swprintf_s(buf, cch, L"%.0f", (double)m.current);
+            break;
+        case ItemKind::Net: {
+            wchar_t d[16] = {}, u[16] = {};
+            FmtSpeed(m.current, d, 16);
+            FmtSpeed(netUp, u, 16);
+            swprintf_s(buf, cch, L"↓%s↑%s", d, u);
+            break;
+        }
+        default:
+            wcscpy_s(buf, cch, L"--");
+            break;
+    }
+}
+
+Gdiplus::Color Widget::ItemColor(int idx) const {
+    const Metric& m = _metrics[idx];
+    if (!m.valid)
+        return _labelColor;
+    switch ((ItemKind)idx) {
+        case ItemKind::Power: return ValueColor(m.current, _thr.powerElevated, _thr.powerCritical);
+        case ItemKind::Fan: return ValueColor(m.current, _thr.fanElevated, _thr.fanCritical);
+        case ItemKind::CpuUsage: return ValueColor(m.current, _thr.usageElevated, _thr.usageCritical);
+        case ItemKind::CpuTemp: return ValueColor(m.current, _thr.tempElevated, _thr.tempCritical);
+        case ItemKind::Mem: return ValueColor(m.current, _thr.memElevated, _thr.memCritical);
+        case ItemKind::Net: return _sevGreen;   // 网速无阈值语义：恒定"正常色"
+        default: return _labelColor;
+    }
+}
+
+// 按"最坏值样本"一次性定块宽：数值位数进位/单位切换都不改变窗口宽度（防抽动）
+void Widget::MeasureBlocks(HDC screenDC) {
+    static const wchar_t* kMaxSample[kItemCount] = {
+        L"888.8",          // 功耗
+        L"8888",           // 风扇
+        L"100",            // 占用
+        L"100",            // 温度
+        L"100",            // 内存
+        L"↓8888↑8888",     // 网速（下行↑上行）
+    };
+    HDC mdc = CreateCompatibleDC(screenDC);
+    FontFamily ffVal(L"Segoe UI");
+    Font valFont(&ffVal, 12.f, Gdiplus::FontStyleBold, UnitPixel);
+    FontFamily ffLbl(L"Microsoft YaHei UI");
+    Font lblFont(&ffLbl, 9.f, Gdiplus::FontStyleRegular, UnitPixel);
+
+    for (int i = 0; i < kItemCount; i++) {
+        InkBox vb = MeasureInk(mdc, valFont, kMaxSample[i]);
+        InkBox lb = MeasureInk(mdc, lblFont, ItemLabel(i));
+        _items[i].blockW = (int)std::ceil(std::max(vb.w, lb.w)) + kTextPad * 2;
+    }
+    DeleteDC(mdc);
+    _blocksMeasured = true;
+}
+
 void Widget::Render() {
     HDC screenDC = GetDC(nullptr);
 
@@ -222,30 +359,27 @@ void Widget::Render() {
     FontFamily ffLbl(L"Microsoft YaHei UI");
     Font lblFont(&ffLbl, 9.f, Gdiplus::FontStyleRegular, UnitPixel);
 
-    wchar_t pbuf[32] = {};
-    if (_power.valid)
-        swprintf_s(pbuf, L"%.1f", (double)_power.current);   // 托盘窗口不带单位，只显示数值
-    else
-        wcscpy_s(pbuf, L"--");
+    if (!_blocksMeasured)
+        MeasureBlocks(screenDC);
 
-    wchar_t fbuf[32] = {};
-    if (_fan.valid)
-        swprintf_s(fbuf, L"%.0f", (double)_fan.current);
-    else
-        wcscpy_s(fbuf, L"--");
+    // 只排列可见项：x 逐个累加（定宽块 + 项间距）
+    int visIdx[kItemCount] = {};
+    int visCount = 0;
+    int cursorX = 0;
+    for (int i = 0; i < kItemCount; i++) {
+        if (!_items[i].visible)
+            continue;
+        if (visCount > 0)
+            cursorX += kPairGap;
+        _items[i].x = cursorX;
+        cursorX += _items[i].blockW;
+        visIdx[visCount++] = i;
+    }
+    _contentW = cursorX;
 
-    // 块宽贴合实际墨迹（MeasureCharacterRanges）：居中且紧凑；位数进位只差几 px，窗口微调可接受
-    InkBox powerVal, powerLbl, fanVal, fanLbl;
-    {
-        HDC mdc = CreateCompatibleDC(screenDC);
-        powerVal = MeasureInk(mdc, valFont, pbuf);
-        powerLbl = MeasureInk(mdc, lblFont, L"功耗");
-        fanVal = MeasureInk(mdc, valFont, fbuf);
-        fanLbl = MeasureInk(mdc, lblFont, L"风扇");
-        DeleteDC(mdc);
-        _powerBlockW = (int)std::ceil(std::max(powerVal.w, powerLbl.w)) + kTextPad * 2;
-        _fanBlockW = (int)std::ceil(std::max(fanVal.w, fanLbl.w)) + kTextPad * 2;
-        _contentW = _powerBlockW + kPairGap + _fanBlockW;
+    if (visCount == 0) {
+        ReleaseDC(nullptr, screenDC);
+        return;
     }
 
     int width = _contentW;
@@ -268,29 +402,38 @@ void Widget::Render() {
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
         g.Clear(Color(0, 0, 0, 0));
 
-        auto DrawPair = [&](int x0, int bw, const InkBox& valInk, const InkBox& lblInk,
-                            const wchar_t* valueText, const wchar_t* label,
-                            const Metric& m, double elevated, double critical, bool hover) {
-            if (hover) {
+        HDC mdcInk = CreateCompatibleDC(screenDC);
+
+        for (int k = 0; k < visCount; k++) {
+            int i = visIdx[k];
+            const Metric& m = _metrics[i];
+            int x0 = _items[i].x;
+            int bw = _items[i].blockW;
+
+            if (_hovering && _hoverIdx == i) {
                 SolidBrush hb(_hoverBack);
                 g.FillRectangle(&hb, (float)x0, 1.f, (float)bw, (float)(height - 2));
             }
 
+            wchar_t vbuf[40] = {};
+            FormatValue(i, m, _netUp, vbuf, 40);
+            const wchar_t* label = ItemLabel(i);
+
+            InkBox vb = MeasureInk(mdcInk, valFont, vbuf);
+            InkBox lb = MeasureInk(mdcInk, lblFont, label);
+
             // 手动居中：墨迹盒宽 = 块宽-2*pad 时左右各留 1px；PointF 定位不裁剪
-            Color vc = m.valid ? ValueColor(m.current, elevated, critical) : _labelColor;
+            Color vc = ItemColor(i);
             SolidBrush valBrush(vc);
-            float vx = x0 + (bw - valInk.w) / 2.f - valInk.x;
-            g.DrawString(valueText, -1, &valFont, PointF(vx, (float)(height / 2 - 12)), &valBrush);
+            float vx = x0 + (bw - vb.w) / 2.f - vb.x;
+            g.DrawString(vbuf, -1, &valFont, PointF(vx, (float)(height / 2 - 12)), &valBrush);
 
             SolidBrush lblBrush(_labelColor);
-            float lx = x0 + (bw - lblInk.w) / 2.f - lblInk.x;
+            float lx = x0 + (bw - lb.w) / 2.f - lb.x;
             g.DrawString(label, -1, &lblFont, PointF(lx, (float)(height / 2 + 4)), &lblBrush);
-        };
+        }
 
-        DrawPair(0, _powerBlockW, powerVal, powerLbl, pbuf, L"功耗", _power, _thr.powerElevated, _thr.powerCritical,
-                 _hovering && _hoverPower);
-        DrawPair(_powerBlockW + kPairGap, _fanBlockW, fanVal, fanLbl, fbuf, L"风扇", _fan, _thr.fanElevated, _thr.fanCritical,
-                 _hovering && !_hoverPower);
+        DeleteDC(mdcInk);
     }
 
     BLENDFUNCTION blend{};
@@ -412,26 +555,33 @@ void Widget::ScanForeignWidgets(int boundaryRight, int tbTop, int tbBottom) {
 
 // —— 悬停 ——
 
-bool Widget::HitPower(POINT pt) const {
+int Widget::HitTest(POINT pt) const {
+    if (!_hwnd)
+        return -1;
     RECT r{};
-    GetWindowRect(_hwnd, &r);
-    int pw = (int)(_powerBlockW * (GetDpiForWindow(_hwnd) / 96.0));
-    return pt.x >= r.left && pt.x < r.left + pw;
-}
-
-bool Widget::HitFan(POINT pt) const {
-    RECT r{};
-    GetWindowRect(_hwnd, &r);
-    int pw = (int)(_powerBlockW * (GetDpiForWindow(_hwnd) / 96.0));
-    int gw = (int)(kPairGap * (GetDpiForWindow(_hwnd) / 96.0));
-    int left = r.left + pw + gw;
-    int right = r.left + (int)(_contentW * (GetDpiForWindow(_hwnd) / 96.0));
-    return pt.x >= left && pt.x < right;
+    if (!GetWindowRect(_hwnd, &r))
+        return -1;
+    double scale = GetDpiForWindow(_hwnd) / 96.0;
+    int rel = pt.x - r.left;
+    for (int i = 0; i < kItemCount; i++) {
+        if (!_items[i].visible)
+            continue;
+        int left = (int)(_items[i].x * scale);
+        int right = (int)((_items[i].x + _items[i].blockW) * scale);
+        if (rel >= left && rel < right)
+            return i;
+    }
+    return -1;
 }
 
 void Widget::ShowTip(POINT pt) {
-    bool power = HitPower(pt);
-    if (power == _hoverPower && _hovering && _tipHwnd && IsWindowVisible(_tipHwnd)) {
+    int idx = HitTest(pt);
+    if (idx < 0) {
+        HideTip();
+        return;
+    }
+
+    if (idx == _hoverIdx && _hovering && _tipHwnd && IsWindowVisible(_tipHwnd)) {
         // 同一块悬停，仅更新内容
         InvalidateRect(_tipHwnd, nullptr, FALSE);
         return;
@@ -442,7 +592,7 @@ void Widget::ShowTip(POINT pt) {
                                    kTipClass, L"", WS_POPUP, 0, 0, kTipW, kTipH,
                                    nullptr, nullptr, _hInst, this);
     }
-    _hoverPower = power;
+    _hoverIdx = idx;
     _hovering = true;
 
     RECT r{};
@@ -452,9 +602,11 @@ void Widget::ShowTip(POINT pt) {
         return;
 
     double scale = GetDpiForWindow(_hwnd) / 96.0;
-    int blockW = (int)((power ? _powerBlockW : _fanBlockW) * scale);
-    int blockX = power ? r.left : r.left + (int)((_powerBlockW + kPairGap) * scale);
+    int blockX = r.left + (int)(_items[idx].x * scale);
+    int blockW = (int)(_items[idx].blockW * scale);
     int cardX = blockX + blockW / 2 - kTipW / 2;
+    if (cardX < 0)
+        cardX = 0;   // 屏幕左缘保护
     int cardY = tb.top - kTipH - 12;
     if (cardY < 0)
         cardY = 0;
@@ -491,7 +643,7 @@ LRESULT Widget::OnMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             TrackMouseEvent(&tme);
             POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             ClientToScreen(hwnd, &pt);
-            if (HitPower(pt) || HitFan(pt))
+            if (HitTest(pt) >= 0)
                 ShowTip(pt);
             else
                 HideTip();
@@ -564,16 +716,15 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 Pen borderPen(Color(0x26, 0xFF, 0xFF, 0xFF), 1.f);
                 g.DrawPath(&borderPen, &path);
 
-                const Metric& m = self->_hoverPower ? self->_power : self->_fan;
-                const wchar_t* title = self->_hoverPower ? L"CPU 功耗" : L"风扇转速";
+                int idx = self->_hoverIdx;
+                if (idx < 0 || idx >= kItemCount)
+                    idx = 0;
+                const Metric& m = self->_metrics[idx];
+                const wchar_t* title = ItemTitle(idx);
                 bool has = m.valid;
 
-                wchar_t cur[32] = {};
-                if (has)
-                    swprintf_s(cur, self->_hoverPower ? L"%.1f" : L"%.0f",
-                               (double)m.current);
-                else
-                    wcscpy_s(cur, L"--");
+                wchar_t cur[40] = {};
+                FormatValue(idx, m, self->_netUp, cur, 40);
 
                 FontFamily ffLbl(L"Microsoft YaHei UI");
                 Font titleFont(&ffLbl, 13.f, Gdiplus::FontStyleRegular, UnitPixel);
@@ -583,16 +734,13 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 Font smallFont(&ffLbl, 11.f, Gdiplus::FontStyleRegular, UnitPixel);
 
                 SolidBrush titleBrush(Color(0xD6, 0xFF, 0xFF, 0xFF));
-                Color vc = has ? (self->_hoverPower
-                                      ? self->ValueColor(m.current, self->_thr.powerElevated, self->_thr.powerCritical)
-                                      : self->ValueColor(m.current, self->_thr.fanElevated, self->_thr.fanCritical))
-                               : Color(0x96, 0xFF, 0xFF, 0xFF);
+                Color vc = has ? self->ItemColor(idx) : Color(0x96, 0xFF, 0xFF, 0xFF);
                 SolidBrush valBrush(vc);
                 SolidBrush labelBrush(Color(0xA8, 0xFF, 0xFF, 0xFF));
                 SolidBrush statBrush(Color(0xF2, 0xFF, 0xFF, 0xFF));
 
                 // 顶部行：标题/数值/单位 底线对齐（同一条基线），圆点与标题垂直居中
-                const wchar_t* unit = self->_hoverPower ? L"W" : L"RPM";
+                const wchar_t* unit = ItemUnit(idx);
                 const float rowBottom = 26.f;
                 HDC mdc2 = CreateCompatibleDC(screenDC);
                 InkBox tb = MeasureInk(mdc2, titleFont, title);
@@ -608,7 +756,7 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.FillEllipse(&dotBrush, 14.f, rowBottom - tb.h / 2.f - 4.f, 8.f, 8.f);
 
                 // 中部：60 拍趋势图（参照 GlintBar 悬停弹出大图 + 统计）
-                const std::vector<float>& hist = self->_hoverPower ? self->_powerHist : self->_fanHist;
+                const std::vector<float>& hist = self->_hist[idx];
                 float gx = 14.f, gy = 38.f, gw = (float)w - 28.f, gh = 40.f;
                 if (!hist.empty()) {
                     float vmin = hist[0], vmax = hist[0];

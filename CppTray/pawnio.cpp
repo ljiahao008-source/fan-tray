@@ -87,8 +87,20 @@ bool PawnIo::ReadMsr(uint32_t index, uint32_t& eax, uint32_t& edx) {
     return true;
 }
 
-void PawnIo::Close() {
-    if (_h != INVALID_HANDLE_VALUE) {
+bool PawnIo::ReadSmn(uint32_t offset, uint32_t& value) {
+    if (_h == INVALID_HANDLE_VALUE)
+        return false;
+
+    int64_t input[1] = {offset};
+    int64_t output[1] = {0};
+    if (ExecuteFn(_h, "ioctl_read_smn", input, 1, output, 1) != 1)
+        return false;
+
+    value = (uint32_t)((uint64_t)output[0] & 0xFFFFFFFFu);
+    return true;
+}
+
+void PawnIo::Close() {    if (_h != INVALID_HANDLE_VALUE) {
         CloseHandle(_h);
         _h = INVALID_HANDLE_VALUE;
     }

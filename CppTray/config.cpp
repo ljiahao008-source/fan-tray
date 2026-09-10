@@ -105,6 +105,12 @@ AppConfig LoadConfig() {
 
     JsonInt(s, L"RefreshIntervalMs", &cfg.RefreshIntervalMs);
     JsonBool(s, L"AutoStart", &cfg.AutoStart);
+    JsonBool(s, L"ShowPower", &cfg.ShowPower);
+    JsonBool(s, L"ShowFan", &cfg.ShowFan);
+    JsonBool(s, L"ShowCpuUsage", &cfg.ShowCpuUsage);
+    JsonBool(s, L"ShowCpuTemp", &cfg.ShowCpuTemp);
+    JsonBool(s, L"ShowMem", &cfg.ShowMem);
+    JsonBool(s, L"ShowNet", &cfg.ShowNet);
 
     if (cfg.RefreshIntervalMs < 250 || cfg.RefreshIntervalMs > 60000)
         cfg.RefreshIntervalMs = 1000;
@@ -112,9 +118,20 @@ AppConfig LoadConfig() {
 }
 
 bool SaveConfig(const AppConfig& cfg) {
-    wchar_t buf[256] = {};
-    swprintf_s(buf, L"{\r\n  \"RefreshIntervalMs\": %d,\r\n  \"AutoStart\": %s\r\n}",
-               cfg.RefreshIntervalMs, cfg.AutoStart ? L"true" : L"false");
+    wchar_t buf[1024] = {};
+    swprintf_s(buf,
+               L"{\r\n  \"RefreshIntervalMs\": %d,\r\n  \"AutoStart\": %s,\r\n"
+               L"  \"ShowPower\": %s,\r\n  \"ShowFan\": %s,\r\n"
+               L"  \"ShowCpuUsage\": %s,\r\n  \"ShowCpuTemp\": %s,\r\n"
+               L"  \"ShowMem\": %s,\r\n  \"ShowNet\": %s\r\n}",
+               cfg.RefreshIntervalMs,
+               cfg.AutoStart ? L"true" : L"false",
+               cfg.ShowPower ? L"true" : L"false",
+               cfg.ShowFan ? L"true" : L"false",
+               cfg.ShowCpuUsage ? L"true" : L"false",
+               cfg.ShowCpuTemp ? L"true" : L"false",
+               cfg.ShowMem ? L"true" : L"false",
+               cfg.ShowNet ? L"true" : L"false");
 
     // 统一写 UTF-8（与 LoadConfig 的默认解码路径一致，避免保存后读回乱码）
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);

@@ -26,7 +26,7 @@ struct App {
     MonitorCore* core = nullptr;
     AppConfig cfg;
     CRITICAL_SECTION snapLock;
-    Metric snapPower, snapFan;
+    SampleSet snap;
     volatile LONG running = 1;
     volatile LONG intervalMs = 1000;   // 采样间隔（设置改动即时生效，免线程重启竞态）
     HANDLE sampleThread = nullptr;
@@ -128,12 +128,11 @@ DWORD WINAPI SampleThreadProc(LPVOID p) {
             }
         }
 
-        Metric power, fan;
-        app->core->Sample(power, fan);
+        SampleSet s;
+        app->core->Sample(s);
 
         EnterCriticalSection(&app->snapLock);
-        app->snapPower = power;
-        app->snapFan = fan;
+        app->snap = s;
         LeaveCriticalSection(&app->snapLock);
 
         PostMessage(app->mainHwnd, kSampleMsg, 0, 0);
@@ -153,28 +152,38 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case kSampleMsg: {
-            Metric power, fan;
+            SampleSet s;
             EnterCriticalSection(&g_app.snapLock);
-            power = g_app.snapPower;
-            fan = g_app.snapFan;
+            s = g_app.snap;
             LeaveCriticalSection(&g_app.snapLock);
 
             if (g_app.widget && g_app.core) {
                 if (!g_app.thresholdsApplied) {
                     g_app.thr = g_app.core->GetThresholds();
                     g_app.widget->SetThresholds(g_app.thr);
+                    g_app.widget->ApplyConfig(g_app.cfg);
                     g_app.thresholdsApplied = true;
                 }
-                g_app.widget->Update(power, fan);
+                g_app.widget->Update(s);
             }
 
-            // ToolTip：功耗 + 风扇当前/平均
-            wchar_t tip[128] = {};
-            swprintf_s(tip, L"功耗 %.1f W · 平均 %.1f\n风扇 %.0f RPM · 平均 %.0f",
-                       power.valid ? (double)power.current : -1.0,
-                       power.valid ? (double)power.avg : -1.0,
-                       fan.valid ? (double)fan.current : -1.0,
-                       fan.valid ? (double)fan.avg : -1.0);
+            // 托盘 tooltip：全部指标当前值（-- 表示该项无数据）
+            auto cur = [](const Metric& m, const wchar_t* fmt) {
+                static wchar_t bufs[8][24];
+                static int slot = 0;
+                wchar_t* b = bufs[slot++ & 7];
+                if (!m.valid)
+                    wcscpy_s(b, 24, L"--");
+                else
+                    swprintf_s(b, 24, fmt, (double)m.current);
+                return b;
+            };
+
+            wchar_t tip[256] = {};
+            swprintf_s(tip, L"功耗 %s W · 风扇 %s RPM\nCPU %s%% · %s°C · 内存 %s%% · 网速 ↓%s↑%s KB/s",
+                       cur(s.power, L"%.1f"), cur(s.fan, L"%.0f"),
+                       cur(s.cpuUsage, L"%.0f"), cur(s.cpuTemp, L"%.0f"), cur(s.mem, L"%.0f"),
+                       cur(s.netDown, L"%.0f"), cur(s.netUp, L"%.0f"));
             if (g_app.tray)
                 g_app.tray->SetTooltip(tip);
             return 0;
@@ -228,6 +237,8 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
                 g_app.cfg = newCfg;
                 SaveConfig(newCfg);
                 g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
+                if (g_app.widget)
+                    g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
             }
             break;
         }
@@ -297,6 +308,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
     g_app.tray = new TrayIcon();
     g_app.tray->Create(g_app.mainHwnd, hInst);
+
+    g_app.widget->ApplyConfig(g_app.cfg);   // 启动即按配置确定显示项（首拍数据到达前也保持正确宽度）
 
     // 启动采样线程
     g_app.intervalMs = g_app.cfg.RefreshIntervalMs;

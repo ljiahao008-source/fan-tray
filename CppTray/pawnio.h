@@ -18,6 +18,9 @@ public:
     // 读取 MSR（低 32 位 EAX / 高 32 位 EDX）。失败返回 false。
     bool ReadMsr(uint32_t index, uint32_t& eax, uint32_t& edx);
 
+    // 读取 AMD SMN 寄存器（System Management Network，如温度 0x59800）。失败返回 false。
+    bool ReadSmn(uint32_t offset, uint32_t& value);
+
     void Close();
 
 private:

@@ -1,8 +1,15 @@
+// GetIfTable2 / MIB_IF_ROW2 需要 Vista+ 目标版本声明（必须在任何 windows 头之前）
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+
 #include "monitor.h"
 
 #include <cwctype>
 #include <cstdlib>
 #include <vector>
+#include <iphlpapi.h>
+#include <cstdint>
 
 namespace {
 
@@ -10,6 +17,10 @@ constexpr uint32_t kMsrIntelPowerUnit = 0x606;
 constexpr uint32_t kMsrIntelPkgEnergy = 0x611;   // PKG_ENERGY_STATUS
 constexpr uint32_t kMsrAmdPowerUnit = 0xC0010299;
 constexpr uint32_t kMsrAmdPkgEnergy = 0xC001029B;
+
+constexpr uint32_t kSmnAmdThmTconCurTmp = 0x00059800;   // AMD Zen 温度寄存器（对照 LHM Amd17Cpu）
+constexpr uint32_t kTempRangeSelMask = 0x80000;
+constexpr uint32_t kTempTjSelMask = 0x30000;
 
 constexpr int kFanDebounceTicks = 3;             // 风扇连续失败 3 拍才算真无数据
 constexpr ULONGLONG kPowerDeadReviveMs = 60000;  // 功耗持续 0/空 60s → 自愈
@@ -73,6 +84,7 @@ bool MonitorCore::SetupPawnPower() {
     //   AMD（Zen，Family17h 体系）：AMDFamily17.bin + 0xC0010299/0xC001029B
     bool isAmd = ReadCpuNameImpl().find(L"AMD") != std::wstring::npos ||
                  ReadCpuNameImpl().find(L"Ryzen") != std::wstring::npos;
+    _isAmd = isAmd;
 
     WORD resId = isAmd ? 103 : 101;               // IDR_AMDFAMILY17 / IDR_INTELMSR
     uint32_t unitMsr = isAmd ? kMsrAmdPowerUnit : kMsrIntelPowerUnit;
@@ -122,7 +134,120 @@ bool MonitorCore::ReadPackagePower(float& watts) {
     return false;   // 第一拍只做基准，无功耗值
 }
 
-void MonitorCore::Sample(Metric& power, Metric& fan) {
+bool MonitorCore::ReadCpuUsage(float& pct) {
+    FILETIME idleFt{}, kernelFt{}, userFt{};
+    if (!GetSystemTimes(&idleFt, &kernelFt, &userFt))
+        return false;
+
+    ULONGLONG idle = ((ULONGLONG)idleFt.dwHighDateTime << 32) | idleFt.dwLowDateTime;
+    ULONGLONG kernel = ((ULONGLONG)kernelFt.dwHighDateTime << 32) | kernelFt.dwLowDateTime;
+    ULONGLONG user = ((ULONGLONG)userFt.dwHighDateTime << 32) | userFt.dwLowDateTime;
+
+    if (!_hasLastSysTimes) {
+        _lastIdle = idle;
+        _lastKernel = kernel;
+        _lastUser = user;
+        _hasLastSysTimes = true;
+        return false;   // 首拍只做基准
+    }
+
+    ULONGLONG dIdle = idle - _lastIdle;
+    ULONGLONG dKernel = kernel - _lastKernel;   // kernel 时间已含 idle
+    ULONGLONG dUser = user - _lastUser;
+    _lastIdle = idle;
+    _lastKernel = kernel;
+    _lastUser = user;
+
+    ULONGLONG total = dKernel + dUser;
+    if (total == 0)
+        return true;   // 同刻重复采样：占用视为 0，保持曲线连续（不算失败）
+    double busy = (double)total - (double)dIdle;
+    if (busy < 0)
+        busy = 0;
+    double v = busy * 100.0 / (double)total;
+    if (v > 100.0)
+        v = 100.0;
+    pct = (float)v;
+    return true;
+}
+
+bool MonitorCore::ReadCpuTemp(float& celsius) {
+    // 仅 AMD（Zen）走 SMN；Intel 需 DTS（0x1A2）暂未实现 → 显示 "--"
+    if (!_pawnOk || !_isAmd)
+        return false;
+
+    uint32_t raw = 0;
+    if (!_pawn.ReadSmn(kSmnAmdThmTconCurTmp, raw))
+        return false;
+
+    // 对照 LHM Amd17Cpu：温度 = (raw >> 21) * 0.125 ℃；特定范围标记需减 49
+    bool tempOffsetFlag = (raw & kTempRangeSelMask) != 0 || (raw & kTempTjSelMask) == kTempTjSelMask;
+    float t = (float)((raw >> 21) * 125) * 0.001f;
+    if (tempOffsetFlag)
+        t -= 49.0f;
+
+    if (t <= 0.f || t > 125.f)   // 越界视为无效（寄存器未就绪/机型不支持）
+        return false;
+    celsius = t;
+    return true;
+}
+
+bool MonitorCore::ReadMemUsage(float& pct) {
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (!GlobalMemoryStatusEx(&ms))
+        return false;
+    pct = (float)ms.dwMemoryLoad;   // 物理内存占用百分比（与 C# 版同口径）
+    return true;
+}
+
+bool MonitorCore::ReadNetSpeeds(float& downKBps, float& upKBps) {
+    // 用经典 GetIfTable（MIB_IFROW，32 位计数）：无 SDK 版本门槛，1 秒采样下不会回绕
+    DWORD size = 0;
+    if (GetIfTable(nullptr, &size, FALSE) != ERROR_INSUFFICIENT_BUFFER || size == 0)
+        return false;
+
+    std::vector<BYTE> buf(size, 0);
+    MIB_IFTABLE* table = (MIB_IFTABLE*)buf.data();
+    if (GetIfTable(table, &size, FALSE) != NO_ERROR)
+        return false;
+
+    ULONGLONG inOctets = 0, outOctets = 0;
+    for (DWORD i = 0; i < table->dwNumEntries; i++) {
+        const MIB_IFROW& r = table->table[i];
+        if (r.dwType == IF_TYPE_SOFTWARE_LOOPBACK || r.dwType == IF_TYPE_TUNNEL)
+            continue;                                     // 排除回环/隧道（VPN 虚拟口）
+        if (r.dwOperStatus != IF_OPER_STATUS_OPERATIONAL)
+            continue;                                     // 未连接/未启用
+        inOctets += r.dwInOctets;
+        outOctets += r.dwOutOctets;
+    }
+
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!_hasLastNet) {
+        _lastNetIn = inOctets;
+        _lastNetOut = outOctets;
+        _lastNetTime = now;
+        _hasLastNet = true;
+        return false;   // 首拍只做基准
+    }
+
+    double dt = (double)(now.QuadPart - _lastNetTime.QuadPart) / (double)_freq.QuadPart;
+    uint32_t dIn = (uint32_t)(inOctets - _lastNetIn);      // 32 位计数器：无符号差值自然处理回绕
+    uint32_t dOut = (uint32_t)(outOctets - _lastNetOut);
+    _lastNetIn = inOctets;
+    _lastNetOut = outOctets;
+    _lastNetTime = now;
+
+    if (dt < 0.05)
+        return false;
+    downKBps = (float)((double)dIn / dt / 1024.0);
+    upKBps = (float)((double)dOut / dt / 1024.0);
+    return true;
+}
+
+void MonitorCore::Sample(SampleSet& out) {
     // —— 功耗（读 MSR 放锁外）——
     float watts = 0.f;
     bool gotPower = ReadPackagePower(watts);
@@ -154,6 +279,13 @@ void MonitorCore::Sample(Metric& power, Metric& fan) {
         _hasLastFan = true;
     }
 
+    // —— CPU 占用 / 温度 / 内存 / 网速（均放锁外，单项失败不影响其他指标）——
+    float usage = 0.f, temp = 0.f, memPct = 0.f, downKB = 0.f, upKB = 0.f;
+    bool gotUsage = ReadCpuUsage(usage);
+    bool gotTemp = ReadCpuTemp(temp);
+    bool gotMem = ReadMemUsage(memPct);
+    bool gotNet = ReadNetSpeeds(downKB, upKB);
+
     // —— 统计（与 C# Metric 同算法，锁内更新）——
     EnterCriticalSection(&_lock);
     auto Apply = [](Metric& m, float v, bool repeated) {
@@ -182,8 +314,36 @@ void MonitorCore::Sample(Metric& power, Metric& fan) {
     else
         Invalidate(_fan);
 
-    power = _power;
-    fan = _fan;
+    if (gotUsage)
+        Apply(_cpuUsage, usage, false);
+    else
+        Invalidate(_cpuUsage);
+
+    if (gotTemp)
+        Apply(_cpuTemp, temp, false);
+    else
+        Invalidate(_cpuTemp);
+
+    if (gotMem)
+        Apply(_mem, memPct, false);
+    else
+        Invalidate(_mem);
+
+    if (gotNet) {
+        Apply(_netDown, downKB, false);
+        Apply(_netUp, upKB, false);
+    } else {
+        Invalidate(_netDown);
+        Invalidate(_netUp);
+    }
+
+    out.power = _power;
+    out.fan = _fan;
+    out.cpuUsage = _cpuUsage;
+    out.cpuTemp = _cpuTemp;
+    out.mem = _mem;
+    out.netDown = _netDown;
+    out.netUp = _netUp;
     LeaveCriticalSection(&_lock);
 }
 
@@ -191,6 +351,11 @@ void MonitorCore::ResetStats() {
     EnterCriticalSection(&_lock);
     _power.Reset();
     _fan.Reset();
+    _cpuUsage.Reset();
+    _cpuTemp.Reset();
+    _mem.Reset();
+    _netDown.Reset();
+    _netUp.Reset();
     LeaveCriticalSection(&_lock);
 }
 
@@ -202,6 +367,13 @@ Thresholds MonitorCore::GetThresholds() {
     t.powerCritical = tdp * 1.6;
     t.fanElevated = 3200;
     t.fanCritical = 4800;
+    // 占用/温度/内存为通用经验阈值（与 C# 版一致：绿 / 橙 / 红）
+    t.usageElevated = 70;
+    t.usageCritical = 90;
+    t.tempElevated = 75;
+    t.tempCritical = 90;
+    t.memElevated = 70;
+    t.memCritical = 90;
     return t;
 }
 
