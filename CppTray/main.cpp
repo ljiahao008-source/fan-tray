@@ -11,6 +11,7 @@
 #include "config.h"
 #include "autostart.h"
 #include "settingsdlg.h"
+#include "lockscreendlg.h"
 
 namespace {
 
@@ -242,6 +243,9 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
             }
             break;
         }
+        case kMenuLockScreen:
+            lockscreen::ShowLockScreenWindow(hwnd);
+            break;
         case kMenuReset:
             if (g_app.core)
                 g_app.core->ResetStats();

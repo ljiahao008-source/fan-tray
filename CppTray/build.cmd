@@ -16,8 +16,9 @@ rc.exe /nologo /fo app.res app.rc || exit /b 1
 
 cl.exe /nologo /std:c++17 /O2 /EHsc /DUNICODE /D_UNICODE /DNOMINMAX /W4 /utf-8 ^
   main.cpp tray.cpp widget.cpp monitor.cpp pawnio.cpp wmifan.cpp config.cpp autostart.cpp settingsdlg.cpp ^
+  lockscreen.cpp lockscreendyn.cpp lockscreendlg.cpp ^
   /link /SUBSYSTEM:WINDOWS /OUT:MechrevoMonitorTray.exe app.res ^
-  user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib advapi32.lib comctl32.lib iphlpapi.lib || exit /b 1
+  user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib advapi32.lib comctl32.lib iphlpapi.lib comdlg32.lib || exit /b 1
 
 if exist MechrevoMonitorTray.exe (
     echo [OK] BUILD SUCCESS - MechrevoMonitorTray.exe

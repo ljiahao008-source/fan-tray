@@ -12,6 +12,7 @@ constexpr UINT kMenuSettings = 1;
 constexpr UINT kMenuReset = 2;
 constexpr UINT kMenuAutoStart = 3;
 constexpr UINT kMenuExit = 4;
+constexpr UINT kMenuLockScreen = 5;   // 锁屏设置窗口
 
 class TrayIcon {
 public:
