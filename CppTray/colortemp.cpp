@@ -197,8 +197,11 @@ int ColorTemperatureManager::AdjustTemperature(int deltaK) {
         LeaveCriticalSection(&_lock);
         return -1;
     }
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int minuteOfDay = st.wHour * 60 + st.wMinute;
     _offsetK += deltaK;
-    int target = Clamp(ComputeTemperature(_settings, WrapMin((int)(GetTickCount64() / 60000) % kMinPerDay)) + _offsetK, 1000, 10000);
+    int target = Clamp(ComputeTemperature(_settings, minuteOfDay) + _offsetK, 1000, 10000);
     LeaveCriticalSection(&_lock);
     if (_wakeEvent)
         SetEvent(_wakeEvent);
@@ -284,7 +287,9 @@ void ColorTemperatureManager::ApplyGammaLocked() {
         return;
     }
 
-    int minuteOfDay = WrapMin((int)(GetTickCount64() / 60000) % kMinPerDay);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int minuteOfDay = st.wHour * 60 + st.wMinute;   // 真实当日分钟（0..1439）
     target = Clamp(ComputeTemperature(_settings, minuteOfDay) + _offsetK, 1000, 10000);
 
     // 与 LightBulb 一致：变化 <15K 不重写（避免闪烁/卡顿）
