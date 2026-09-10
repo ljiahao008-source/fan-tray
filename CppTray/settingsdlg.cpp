@@ -77,11 +77,14 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
     ctx.cfg = &cfg;
 
     HWND dlg = CreateWindowExW(0, kDlgClass, L"机械革命监控 - 设置",
-                               WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED,
+                               WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT, 340, 190,
                                parent, nullptr, hInst, &ctx);
     if (!dlg)
         return false;
+    // 置前：从托盘菜单弹出时确保可见可交互
+    SetForegroundWindow(dlg);
+    SetFocus(ctx.edit);
 
     // 刷新间隔
     CreateWindowExW(0, L"STATIC", L"刷新间隔（毫秒，250~60000）：",
