@@ -56,6 +56,7 @@ private:
     int _powerBlockW = 60;
     int _fanBlockW = 60;
     int _contentW = 130;
+    int _relX = 0, _relY = 0;   // 窗口相对 taskbar 的坐标（Position 设置，Render 转屏幕给 UpdateLayeredWindow）
 
     // 主题
     Gdiplus::Color _sevGreen{}, _sevOrange{}, _sevRed{}, _labelColor{};

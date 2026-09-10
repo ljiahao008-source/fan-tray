@@ -262,7 +262,13 @@ void Widget::Render() {
     blend.SourceConstantAlpha = 255;
     blend.AlphaFormat = AC_SRC_ALPHA;
 
-    POINT ptDst{}, ptSrc{};
+    POINT ptSrc{};
+    POINT ptDst{};   // UpdateLayeredWindow 的 ptDst 是屏幕坐标。taskbar 屏幕原点 + 窗口相对位置即可，
+    RECT tb2{};      // 不能用 GetWindowRect(_hwnd)（对嵌入子窗口返回异常值）。
+    if (_taskbar && GetWindowRect(_taskbar, &tb2)) {
+        ptDst.x = tb2.left + _relX;
+        ptDst.y = tb2.top + _relY;
+    }
     SIZE sz{ width, height };
     UpdateLayeredWindow(_hwnd, screenDC, &ptDst, &sz, memDC, &ptSrc, 0, &blend, ULW_ALPHA);
 
@@ -329,6 +335,9 @@ void Widget::Position() {
     if (x == _lastX && width == _lastW && height == _lastH)
         return;
 
+    // 相对 taskbar 的坐标（y 恒 0，贴任务栏顶部）；记录供 Render 转屏幕坐标
+    _relX = x;
+    _relY = 0;
     SetWindowPos(_hwnd, nullptr, x, 0, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     _lastX = x;
     _lastW = width;
