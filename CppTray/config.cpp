@@ -111,9 +111,13 @@ AppConfig LoadConfig() {
     JsonBool(s, L"ShowCpuTemp", &cfg.ShowCpuTemp);
     JsonBool(s, L"ShowMem", &cfg.ShowMem);
     JsonBool(s, L"ShowNet", &cfg.ShowNet);
+    JsonBool(s, L"BrightnessKeysEnabled", &cfg.BrightnessKeysEnabled);
+    JsonInt(s, L"BrightnessStepPercent", &cfg.BrightnessStepPercent);
 
     if (cfg.RefreshIntervalMs < 250 || cfg.RefreshIntervalMs > 60000)
         cfg.RefreshIntervalMs = 1000;
+    if (cfg.BrightnessStepPercent < 1 || cfg.BrightnessStepPercent > 50)
+        cfg.BrightnessStepPercent = 10;
     return cfg;
 }
 
@@ -123,7 +127,8 @@ bool SaveConfig(const AppConfig& cfg) {
                L"{\r\n  \"RefreshIntervalMs\": %d,\r\n  \"AutoStart\": %s,\r\n"
                L"  \"ShowPower\": %s,\r\n  \"ShowFan\": %s,\r\n"
                L"  \"ShowCpuUsage\": %s,\r\n  \"ShowCpuTemp\": %s,\r\n"
-               L"  \"ShowMem\": %s,\r\n  \"ShowNet\": %s\r\n}",
+               L"  \"ShowMem\": %s,\r\n  \"ShowNet\": %s,\r\n"
+               L"  \"BrightnessKeysEnabled\": %s,\r\n  \"BrightnessStepPercent\": %d\r\n}",
                cfg.RefreshIntervalMs,
                cfg.AutoStart ? L"true" : L"false",
                cfg.ShowPower ? L"true" : L"false",
@@ -131,7 +136,9 @@ bool SaveConfig(const AppConfig& cfg) {
                cfg.ShowCpuUsage ? L"true" : L"false",
                cfg.ShowCpuTemp ? L"true" : L"false",
                cfg.ShowMem ? L"true" : L"false",
-               cfg.ShowNet ? L"true" : L"false");
+               cfg.ShowNet ? L"true" : L"false",
+               cfg.BrightnessKeysEnabled ? L"true" : L"false",
+               cfg.BrightnessStepPercent);
 
     // 统一写 UTF-8（与 LoadConfig 的默认解码路径一致，避免保存后读回乱码）
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);

@@ -13,6 +13,10 @@ struct AppConfig {
     bool ShowCpuTemp = true;
     bool ShowMem = true;
     bool ShowNet = true;
+
+    // 屏幕亮度快捷键（DDC/CI，仅外接显示器；默认关，设置里勾选开启）
+    bool BrightnessKeysEnabled = false;
+    int  BrightnessStepPercent = 10;   // 每次步进（1~50）
 };
 
 // 读取 config.json，失败/损坏回退默认值；间隔非法（<250 或 >60000）回退 1000。

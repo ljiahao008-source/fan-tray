@@ -12,6 +12,7 @@
 #include "autostart.h"
 #include "settingsdlg.h"
 #include "lockscreendlg.h"
+#include "ddcbrightness.h"
 
 namespace {
 
@@ -38,6 +39,9 @@ struct App {
 };
 
 App g_app;
+
+// 屏幕亮度快捷键（DDC/CI 模块，仅外接显示器）
+ddcb::HotkeyManager g_brightnessKeys;
 
 // 崩溃兜底：写 crash.log
 LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
@@ -109,6 +113,24 @@ void WriteLog(const wchar_t* msg) {
     DWORD w = 0;
     WriteFile(h, line, (DWORD)(wcslen(line) * sizeof(wchar_t)), &w, nullptr);
     CloseHandle(h);
+}
+
+// 按配置安装/注销亮度快捷键（启动与设置保存后调用）
+void ApplyBrightnessHotkeys(const AppConfig& cfg) {
+    g_brightnessKeys.Uninstall();
+    if (!cfg.BrightnessKeysEnabled)
+        return;
+    bool ok = g_brightnessKeys.Install(
+        g_app.mainHwnd,
+        [](int step) {
+            int n = ddcb::BrightnessController::AdjustAll(step);
+            wchar_t log[96] = {};
+            swprintf_s(log, L"brightness adjust step=%d ok=%d", step, n);
+            WriteLog(log);
+        },
+        MOD_CONTROL | MOD_ALT, VK_UP, VK_DOWN, cfg.BrightnessStepPercent);
+    if (!ok)
+        WriteLog(L"brightness hotkey register failed (occupied?)");
 }
 
 DWORD WINAPI SampleThreadProc(LPVOID p);
@@ -190,6 +212,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_CLOSE: {
+            g_brightnessKeys.Uninstall();   // 注销亮度快捷键
             InterlockedExchange(&g_app.running, 0);
             // 采样线程可能在 WMI 阻塞：放宽等待；超时（线程未退出）则跳过 delete，进程退出由 OS 回收
             DWORD wait = WAIT_OBJECT_0;
@@ -215,6 +238,11 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
+        case WM_HOTKEY:
+            // 亮度 +/− 快捷键（Ctrl+Alt+↑/↓）
+            if (g_brightnessKeys.HandleMessage(msg, wp))
+                return 0;
+            break;
         default:
             if (msg == g_app.taskbarCreatedMsg) {
                 // explorer 重启：任务栏重建后重新嵌入
@@ -240,6 +268,7 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
                 g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
                 if (g_app.widget)
                     g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
+                ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
             }
             break;
         }
@@ -312,6 +341,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
     g_app.tray = new TrayIcon();
     g_app.tray->Create(g_app.mainHwnd, hInst);
+
+    ApplyBrightnessHotkeys(g_app.cfg);   // 按配置安装亮度快捷键（DDC/CI，仅外接显示器）
 
     g_app.widget->ApplyConfig(g_app.cfg);   // 启动即按配置确定显示项（首拍数据到达前也保持正确宽度）
 

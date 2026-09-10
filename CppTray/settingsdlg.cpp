@@ -10,6 +10,7 @@ constexpr int kIdAutoStartCheck = 102;
 constexpr int kIdOk = 103;
 constexpr int kIdCancel = 104;
 constexpr int kIdShowBase = 110;   // 110..115 = 功耗/风扇/占用/温度/内存/网速 勾选框
+constexpr int kIdBrightCheck = 105;
 
 constexpr wchar_t kDlgClass[] = L"MechrevoSettingsDlgClass";
 
@@ -17,6 +18,7 @@ struct DlgCtx {
     AppConfig* cfg;
     HWND edit;
     HWND check;
+    HWND bright;
     HWND show[6] = {};
     bool ok = false;
     bool closed = false;
@@ -49,6 +51,7 @@ LRESULT CALLBACK DlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ctx->cfg->ShowCpuTemp = IsChecked(ctx->show[3]);
                 ctx->cfg->ShowMem = IsChecked(ctx->show[4]);
                 ctx->cfg->ShowNet = IsChecked(ctx->show[5]);
+                ctx->cfg->BrightnessKeysEnabled = IsChecked(ctx->bright);
                 ctx->ok = true;
                 ctx->closed = true;
                 DestroyWindow(hwnd);
@@ -88,7 +91,7 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
 
     HWND dlg = CreateWindowExW(0, kDlgClass, L"机械革命监控 - 设置",
                                WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
-                               CW_USEDEFAULT, CW_USEDEFAULT, 362, 372,
+                               CW_USEDEFAULT, CW_USEDEFAULT, 362, 408,
                                parent, nullptr, hInst, &ctx);
     if (!dlg)
         return false;
@@ -158,9 +161,15 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
                         WS_TABSTOP | BS_AUTOCHECKBOX, 26, 252, 290, 22, kIdAutoStartCheck);
     SendMessageW(ctx.check, BM_SETCHECK, cfg.AutoStart ? BST_CHECKED : BST_UNCHECKED, 0);
 
+    // —— 分组四：屏幕亮度快捷键（DDC/CI，仅外接显示器）——
+    addGroup(L"屏幕亮度（DDC/CI，仅外接显示器）", 14, 294, 320, 56);
+    ctx.bright = addCtrl(L"BUTTON", L"启用快捷键调节亮度（Ctrl+Alt+↑ / ↓，每次 ±10%）",
+                         WS_TABSTOP | BS_AUTOCHECKBOX, 26, 316, 292, 22, kIdBrightCheck);
+    SendMessageW(ctx.bright, BM_SETCHECK, cfg.BrightnessKeysEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+
     // —— 按钮 ——
-    addCtrl(L"BUTTON", L"确定", WS_TABSTOP | BS_DEFPUSHBUTTON, 130, 298, 82, 28, kIdOk);
-    addCtrl(L"BUTTON", L"取消", WS_TABSTOP | BS_PUSHBUTTON, 226, 298, 82, 28, kIdCancel);
+    addCtrl(L"BUTTON", L"确定", WS_TABSTOP | BS_DEFPUSHBUTTON, 130, 360, 82, 28, kIdOk);
+    addCtrl(L"BUTTON", L"取消", WS_TABSTOP | BS_PUSHBUTTON, 226, 360, 82, 28, kIdCancel);
 
     SetFocus(ctx.edit);
 
