@@ -49,6 +49,9 @@ public:
     int AdjustTemperature(int deltaK);
     void TogglePause();
 
+    // 查询当前状态（锁内快照）：enabled=总开关+未暂停；kelvin=当前生效色温
+    void GetState(bool& enabled, int& kelvin) const;
+
     // 宿主消息循环内调用：msg==WM_HOTKEY 且属于本模块时返回 true
     bool HandleHotkey(UINT msg, WPARAM wp);
 

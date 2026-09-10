@@ -292,7 +292,11 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
                 g_app.widget->Update(s);
             }
-            mainwin::Refresh();   // 面板数值（仅可见时刷新）
+            bool ctOn = false;
+            int ctK = 6500;
+            g_colorTemp.GetState(ctOn, ctK);
+            mainwin::SetColorTemp(ctOn, ctK);
+            mainwin::Refresh(s);   // 面板数值（仅可见时刷新）
 
             // 托盘 tooltip：全部指标当前值（-- 表示该项无数据）
             auto cur = [](const Metric& m, const wchar_t* fmt) {

@@ -1,6 +1,8 @@
-// mainwindow.cpp —— Twinkle Tray 式显示器控制面板
-// 每台显示器一张卡片：亮度/对比度/音量滑块、输入源、电源；
-// 滑块拖动松手即写 DDC/CI；数值每秒刷新（可见时）。
+// mainwindow.cpp —— 全功能面板（Twinkle Tray 原版外观，GDI+ 全自绘）
+// 覆盖：硬件监控 + 每台显示器（亮度/对比度/音量滑块、输入源、电源）
+//     + 色温护眼 + 底部操作。滑块拖动松手写 DDC/CI，每秒刷新。
+// 布局一致性：RebuildPanel 与 DrawPanel 用同一套"行式"坐标计算，
+//           命中矩形与实际绘制位置严格对齐。
 
 #include "mainwindow.h"
 
@@ -10,11 +12,10 @@
 #include <cwchar>
 #include <vector>
 
-#include <commctrl.h>
+#include <windowsx.h>
 #include <gdiplus.h>
 
 #pragma comment(lib, "gdiplus.lib")
-#pragma comment(lib, "comctl32.lib")
 
 #include "ddc.h"
 
@@ -22,16 +23,35 @@ using Gdiplus::Color;
 using Gdiplus::Font;
 using Gdiplus::FontFamily;
 using Gdiplus::Graphics;
+using Gdiplus::GraphicsPath;
 using Gdiplus::Pen;
 using Gdiplus::PointF;
+using Gdiplus::RectF;
 using Gdiplus::SolidBrush;
+using Gdiplus::StringFormat;
+using Gdiplus::StringAlignment;
 using Gdiplus::TextRenderingHint;
 using Gdiplus::UnitPixel;
 
 namespace {
 
 constexpr wchar_t kMainWinClass[] = L"MechrevoMainWindowClass";
-constexpr int kClientW = 320;
+constexpr int kPanelW = 380;
+constexpr int kPad = 16;
+constexpr int kMetricsH = 150;      // 监控区块高度
+constexpr int kCardHead = 34;       // 卡片标题区高度
+constexpr int kRowH = 28;           // 每行（滑块/按钮）高度
+constexpr int kCtH = 58;            // 色温区块高度
+constexpr int kFooterH = 50;        // 底部按钮区
+
+// 色板（Twinkle Tray 深色风格）
+const Color kBg(255, 0x14, 0x17, 0x1E);
+const Color kSection(255, 0x1E, 0x23, 0x2E);
+const Color kBorder(255, 0x2E, 0x35, 0x45);
+const Color kText(255, 0xEC, 0xEF, 0xF6);
+const Color kSub(255, 0x8A, 0x93, 0xA6);
+const Color kAccent(255, 0x4A, 0xDE, 0x80);
+const Color kAccentDim(255, 0x2E, 0x41, 0x38);
 
 HWND g_hwnd = nullptr;
 HINSTANCE g_hInst = nullptr;
@@ -39,203 +59,359 @@ HWND g_host = nullptr;
 ULONG_PTR g_gdiToken = 0;
 bool g_rebuilding = false;
 
-// 控件 ID 段
-constexpr int kIdTrackBase   = 0x10000;   // + (monitorIdx<<8) + feature
-constexpr int kIdInputBase   = 0x20000;   // + (monitorIdx<<8) + value
-constexpr int kIdPowerBase   = 0x30000;   // + monitorIdx
+SampleSet g_snap;
+bool g_ctEnabled = false;
+int g_ctKelvin = 6500;
+int g_panelH = 320;
 
-struct SliderCtl {
-    HWND track = nullptr;
-    HWND label = nullptr;
-    BYTE code = 0;          // 0x10/0x12/0x62
-    int monitorIdx = 0;
+// ── 交互元素 ────────────────────────────────────────────────
+enum BtnKind { kBtnAction = 0, kBtnInput = 1, kBtnPower = 2 };
+
+struct Slider {
+    RECT rc;
+    int monitorIdx = -1;
+    BYTE code = 0;
+    int pct = 0;
+};
+
+struct PanelBtn {
+    RECT rc;
+    int kind = kBtnAction;
+    UINT action = 0;
+    int value = 0;
+    wchar_t text[32] = {};
 };
 
 struct MonitorCard {
     std::wstring deviceName;
-    std::vector<SliderCtl> sliders;
-    std::vector<HWND> inputButtons;
-    HWND powerButton = nullptr;
-    bool dragging = false;
+    wchar_t title[128] = {};
+    std::vector<Slider> sliders;
+    std::vector<PanelBtn> buttons;
+    int rows = 0;          // 行数（滑块+按钮）
+    int height = 0;        // 卡片总高
 };
 
 std::vector<MonitorCard> g_cards;
+std::vector<PanelBtn> g_footer;
+PanelBtn g_ctPlus, g_ctMinus, g_ctToggle;
 
-Color SevColor(double v, double elevated, double critical) {
-    if (v <= elevated) return Color(255, 0x4A, 0xDE, 0x80);
-    if (v <= critical) return Color(255, 0xFB, 0x92, 0x3C);
-    return Color(255, 0xF8, 0x71, 0x71);
+bool g_dragging = false;
+int g_dragCard = -1, g_dragSlider = -1;
+
+// ── GDI+ 辅助 ───────────────────────────────────────────────
+void RoundedRect(GraphicsPath& p, float x, float y, float w, float h, float r) {
+    r = std::min(r, std::min(w, h) / 2);
+    p.Reset();
+    p.AddArc(x, y, r * 2, r * 2, 180, 90);
+    p.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+    p.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+    p.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+    p.CloseFigure();
 }
 
-int TrackId(int mi, BYTE code) { return kIdTrackBase + (mi << 8) + code; }
-int InputId(int mi, int value) { return kIdInputBase + (mi << 8) + value; }
-int PowerId(int mi) { return kIdPowerBase + mi; }
-
-// 控件创建（统一 UI 字体）
-HFONT g_uiFont = nullptr;
-HWND MakeCtrl(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id) {
-    HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, g_hwnd,
-                             (HMENU)(INT_PTR)id, g_hInst, nullptr);
-    if (g_uiFont)
-        SendMessageW(c, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
-    return c;
+void DrawStr(Graphics& g, const wchar_t* s, const Font& f, float x, float y, const Color& c) {
+    SolidBrush b(c);
+    g.DrawString(s, -1, &f, PointF(x, y), &b);
 }
 
-// 面板重建：销毁旧控件，按当前显示器列表重建
+void DrawButton(Graphics& g, const PanelBtn& b) {
+    GraphicsPath p;
+    RoundedRect(p, (float)b.rc.left, (float)b.rc.top,
+                (float)(b.rc.right - b.rc.left), (float)(b.rc.bottom - b.rc.top), 6.f);
+    SolidBrush bg(kAccentDim);
+    g.FillPath(&bg, &p);
+    Pen pen(kBorder, 1.f);
+    g.DrawPath(&pen, &p);
+    FontFamily ff(L"Microsoft YaHei UI");
+    Font f(&ff, 12.f, Gdiplus::FontStyleRegular, UnitPixel);
+    SolidBrush tb(kText);
+    StringFormat sf;
+    sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+    sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+    RectF r((float)b.rc.left, (float)b.rc.top, (float)(b.rc.right - b.rc.left),
+            (float)(b.rc.bottom - b.rc.top));
+    g.DrawString(b.text, -1, &f, r, &sf, &tb);
+}
+
+void DrawSliderBar(Graphics& g, const Slider& s) {
+    int yc = (s.rc.top + s.rc.bottom) / 2;
+    int x0 = s.rc.left, x1 = s.rc.right;
+    int trackH = 6;
+    GraphicsPath track;
+    RoundedRect(track, (float)x0, (float)(yc - trackH / 2), (float)(x1 - x0), (float)trackH, 3.f);
+    SolidBrush tb(kBorder);
+    g.FillPath(&tb, &track);
+    float fx = (float)(x0 + (x1 - x0) * std::clamp(s.pct, 0, 100) / 100);
+    if (fx > x0) {
+        GraphicsPath fill;
+        RoundedRect(fill, (float)x0, (float)(yc - trackH / 2), fx - x0, (float)trackH, 3.f);
+        SolidBrush fb(kAccent);
+        g.FillPath(&fb, &fill);
+    }
+    SolidBrush thumb(Color(255, 0xFF, 0xFF, 0xFF));
+    g.FillEllipse(&thumb, fx - 7.f, (float)(yc - 7), 14.f, 14.f);
+}
+
+bool PtInRect(const RECT& r, int x, int y) {
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+bool HitSlider(int x, int y, int& cardIdx, int& sliderIdx) {
+    for (size_t c = 0; c < g_cards.size(); c++)
+        for (size_t s = 0; s < g_cards[c].sliders.size(); s++)
+            if (PtInRect(g_cards[c].sliders[s].rc, x, y)) {
+                cardIdx = (int)c;
+                sliderIdx = (int)s;
+                return true;
+            }
+    return false;
+}
+
+bool HitButton(int x, int y, PanelBtn** out) {
+    for (auto& c : g_cards)
+        for (auto& b : c.buttons)
+            if (PtInRect(b.rc, x, y)) { *out = &b; return true; }
+    for (auto& b : g_footer)
+        if (PtInRect(b.rc, x, y)) { *out = &b; return true; }
+    if (PtInRect(g_ctPlus.rc, x, y)) { *out = &g_ctPlus; return true; }
+    if (PtInRect(g_ctMinus.rc, x, y)) { *out = &g_ctMinus; return true; }
+    if (PtInRect(g_ctToggle.rc, x, y)) { *out = &g_ctToggle; return true; }
+    return false;
+}
+
+// ── 布局（显示器集合变化时重建；与 Draw 区坐标一致）────────────
 void RebuildPanel() {
     g_rebuilding = true;
-    // 销毁全部子控件（递归）
-    HWND child = GetWindow(g_hwnd, GW_CHILD);
-    while (child) {
-        HWND next = GetWindow(child, GW_HWNDNEXT);
-        DestroyWindow(child);
-        child = next;
-    }
     g_cards.clear();
+    g_footer.clear();
 
     std::vector<ddc::Monitor> monitors = ddc::Ddc::Enumerate();
 
-    int y = 10;
-    HFONT titleFont = nullptr;
-    {
-        NONCLIENTMETRICSW ncm{};
-        ncm.cbSize = sizeof(ncm);
-        SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
-        LOGFONTW lf = ncm.lfMessageFont;
-        lf.lfHeight = -16;
-        lf.lfWeight = FW_BOLD;
-        titleFont = CreateFontIndirectW(&lf);
-    }
+    int y = kPad + kCardHead;              // 监控区块顶部
+    y += kMetricsH + 8;
 
-    // 面板标题
-    HWND hdr = MakeCtrl(L"STATIC", L"显示器亮度控制（DDC/CI）", SS_LEFT, 14, y, 260, 20, 0);
-    SendMessageW(hdr, WM_SETFONT, (WPARAM)titleFont, TRUE);
-    y += 28;
-
-    for (size_t mi = 0; mi < monitors.size(); mi++) {
-        auto& mon = monitors[mi];
+    for (auto& mon : monitors) {
         MonitorCard card;
         card.deviceName = mon.deviceName;
+        wcsncpy_s(card.title, mon.description.empty() ? L"显示器" : mon.description.c_str(), _TRUNCATE);
 
-        int cy = y;
-        HWND t = MakeCtrl(L"STATIC", mon.description.empty() ? L"显示器" : mon.description.c_str(),
-                          SS_LEFT, 14, cy, 280, 18, 0);
-        SendMessageW(t, WM_SETFONT, (WPARAM)titleFont, TRUE);
-        cy += 26;
+        int row = 0;
+        auto rowY = [&](int r) { return y + kCardHead + 6 + r * kRowH; };
 
-        auto addSlider = [&](const wchar_t* name, BYTE code, DWORD cur, DWORD max) {
-            SliderCtl s;
+        auto addSlider = [&](BYTE code, DWORD cur, DWORD max) {
+            Slider s;
+            s.monitorIdx = (int)g_cards.size();
             s.code = code;
-            s.monitorIdx = (int)mi;
-            MakeCtrl(L"STATIC", name, SS_LEFT, 20, cy + 3, 44, 16, 0);
-            s.track = MakeCtrl(TRACKBAR_CLASSW, L"",
-                               WS_TABSTOP | TBS_AUTOTICKS | TBS_ENABLESELRANGE,
-                               70, cy, 190, 22, TrackId((int)mi, code));
-            SendMessageW(s.track, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
-            int pct = max > 0 ? (int)std::lround(cur * 100.0 / max) : 0;
-            SendMessageW(s.track, TBM_SETPOS, TRUE, std::clamp(pct * 10, 0, 1000));
-            wchar_t buf[16] = {};
-            swprintf_s(buf, L"%d%%", pct);
-            s.label = MakeCtrl(L"STATIC", buf, SS_RIGHT, 262, cy + 3, 44, 16, 0);
+            s.pct = max > 0 ? (int)std::lround(cur * 100.0 / max) : 0;
+            int cy = rowY(row);
+            s.rc = { kPad + 96, cy - 6, kPanelW - kPad - 14, cy + 6 };
             card.sliders.push_back(s);
-            cy += 28;
+            row++;
         };
-
-        if (mon.hasBrightness)
-            addSlider(L"亮度", ddc::kVcpLuminance, mon.brightnessCur, mon.brightnessMax);
-        if (mon.hasContrast)
-            addSlider(L"对比度", ddc::kVcpContrast, mon.contrastCur, mon.contrastMax);
-        if (mon.hasVolume)
-            addSlider(L"音量", ddc::kVcpAudioVolume, mon.volumeCur, mon.volumeMax);
+        if (mon.hasBrightness) addSlider(ddc::kVcpLuminance, mon.brightnessCur, mon.brightnessMax);
+        if (mon.hasContrast)   addSlider(ddc::kVcpContrast, mon.contrastCur, mon.contrastMax);
+        if (mon.hasVolume)     addSlider(ddc::kVcpAudioVolume, mon.volumeCur, mon.volumeMax);
 
         if (mon.hasInputs && !mon.inputs.empty()) {
-            MakeCtrl(L"STATIC", L"输入源", SS_LEFT, 20, cy + 3, 44, 16, 0);
-            int bx = 70;
+            int cy = rowY(row);
+            int bx = kPad + 96;
             for (DWORD v : mon.inputs) {
-                wchar_t buf[24] = {};
-                swprintf_s(buf, L"%lu", v);
-                HWND b = MakeCtrl(L"BUTTON", buf, WS_TABSTOP | BS_PUSHBUTTON,
-                                  bx, cy, 34, 22, InputId((int)mi, (int)v));
-                card.inputButtons.push_back(b);
-                bx += 38;
-                if (bx > 280) break;
+                PanelBtn b;
+                b.kind = kBtnInput;
+                b.value = (int)v;
+                swprintf_s(b.text, L"%lu", v);
+                b.rc = { bx, cy - 11, bx + 34, cy + 11 };
+                card.buttons.push_back(b);
+                bx += 40;
             }
-            cy += 30;
+            row++;
         }
-
         if (mon.hasPower) {
-            card.powerButton = MakeCtrl(L"BUTTON", L"电源（关）", WS_TABSTOP | BS_PUSHBUTTON,
-                                        70, cy, 90, 24, PowerId((int)mi));
-            cy += 32;
+            int cy = rowY(row);
+            PanelBtn b;
+            b.kind = kBtnPower;
+            wcscpy_s(b.text, L"电源");
+            b.rc = { kPad + 96, cy - 12, kPad + 160, cy + 12 };
+            card.buttons.push_back(b);
+            row++;
         }
 
-        // 卡片分隔线
-        HWND sep = MakeCtrl(L"STATIC", L"", SS_LEFT, 10, cy, 300, 1, 0);
-        (void)sep;
-        y = cy + 14;
+        card.rows = row;
+        card.height = kCardHead + 6 + row * kRowH + 8;
         g_cards.push_back(std::move(card));
+        y += card.height + 8;
     }
 
     if (monitors.empty()) {
-        MakeCtrl(L"STATIC", L"未检测到支持 DDC/CI 的显示器。", SS_LEFT, 14, y, 280, 18, 0);
-        y += 28;
+        y += kCardHead + 26;
     }
 
-    y += 6;
-    // 底部操作按钮
-    struct Btn { int id; const wchar_t* text; int x, w; };
-    Btn btns[] = {
-        { (int)mainwin::ActionSettings,   L"设置",     13, 56 },
-        { (int)mainwin::ActionLockScreen, L"锁屏设置", 79, 74 },
-        { (int)mainwin::ActionReset,      L"重置统计", 161, 74 },
-        { (int)mainwin::ActionExit,       L"退出",     243, 44 },
+    // 色温区块
+    int cy = y + 30;
+    g_ctPlus.rc = { kPad + 140, cy - 11, kPad + 196, cy + 11 };
+    g_ctMinus.rc = { kPad + 202, cy - 11, kPad + 258, cy + 11 };
+    g_ctToggle.rc = { kPad + 264, cy - 11, kPanelW - kPad - 14, cy + 11 };
+    wcscpy_s(g_ctPlus.text, L"+500K");
+    wcscpy_s(g_ctMinus.text, L"-500K");
+    wcscpy_s(g_ctToggle.text, L"暂停/恢复");
+    g_ctPlus.action = mainwin::ActionTempWarm;
+    g_ctMinus.action = mainwin::ActionTempCool;
+    g_ctToggle.action = mainwin::ActionTempToggle;
+    y += kCtH + 8;
+
+    // 底部操作
+    int fy = y + 25;
+    struct F { int id; const wchar_t* text; int x, w; };
+    F fs[] = {
+        { (int)mainwin::ActionSettings, L"设置", kPad, 66 },
+        { (int)mainwin::ActionLockScreen, L"锁屏设置", kPad + 74, 86 },
+        { (int)mainwin::ActionReset, L"重置统计", kPad + 168, 86 },
+        { (int)mainwin::ActionExit, L"退出", kPad + 262, 44 },
     };
-    for (auto& b : btns)
-        MakeCtrl(L"BUTTON", b.text, WS_TABSTOP | BS_PUSHBUTTON, b.x, y, b.w, 30, b.id);
-    y += 40;
+    for (auto& f : fs) {
+        PanelBtn b;
+        b.kind = kBtnAction;
+        b.action = f.id;
+        wcscpy_s(b.text, f.text);
+        b.rc = { f.x, fy - 15, f.x + f.w, fy + 15 };
+        g_footer.push_back(b);
+    }
+    y += kFooterH + 8;
+    g_panelH = y;
 
-    if (titleFont)
-        DeleteObject(titleFont);
-
-    // 调整窗口高度适配内容
-    RECT rc{};
-    GetClientRect(g_hwnd, &rc);
-    int curH = rc.bottom;
-    if (y != curH && g_hwnd) {
-        RECT wr{};
-        GetWindowRect(g_hwnd, &wr);
-        SetWindowPos(g_hwnd, nullptr, 0, 0, kClientW + 16, y + 39, SWP_NOMOVE | SWP_NOACTIVATE);
+    if (g_hwnd) {
+        RECT rc{};
+        GetClientRect(g_hwnd, &rc);
+        SetWindowPos(g_hwnd, nullptr, 0, 0, kPanelW + 16, g_panelH + 39, SWP_NOMOVE | SWP_NOACTIVATE);
     }
     g_rebuilding = false;
 }
 
-// 刷新数值：更新滑块位置与百分比标签
-void RefreshValues() {
-    if (g_rebuilding)
-        return;
-    std::vector<ddc::Monitor> monitors = ddc::Ddc::Enumerate();
-    if (monitors.size() != g_cards.size())
-        return;   // 显示器集合变化由 Rebuild 处理
+// ── 绘制 ─────────────────────────────────────────────────────
+void DrawPanel(Graphics& g) {
+    FontFamily ffLbl(L"Microsoft YaHei UI");
+    Font secFont(&ffLbl, 12.f, Gdiplus::FontStyleBold, UnitPixel);
+    Font lblFont(&ffLbl, 12.f, Gdiplus::FontStyleRegular, UnitPixel);
+    FontFamily ffVal(L"Segoe UI");
+    Font valFont(&ffVal, 14.f, Gdiplus::FontStyleBold, UnitPixel);
+    Font bigVal(&ffVal, 16.f, Gdiplus::FontStyleBold, UnitPixel);
 
-    for (size_t mi = 0; mi < g_cards.size(); mi++) {
-        auto& card = g_cards[mi];
-        auto& mon = monitors[mi];
-        if (card.deviceName != mon.deviceName)
-            return;
-        for (auto& s : card.sliders) {
-            DWORD cur = 0, max = 0;
-            if (!ddc::Ddc::GetVCP(card.deviceName, s.code, cur, max))
-                continue;
-            if (max == 0)
-                max = 100;
-            int pct = (int)std::lround(cur * 100.0 / max);
-            if (!card.dragging)
-                SendMessageW(s.track, TBM_SETPOS, TRUE, std::clamp(pct * 10, 0, 1000));
-            wchar_t buf[16] = {};
-            swprintf_s(buf, L"%d%%", pct);
-            SetWindowTextW(s.label, buf);
-        }
+    SolidBrush bg(kBg);
+    g.FillRectangle(&bg, 0.f, 0.f, (float)kPanelW, (float)g_panelH);
+
+    auto sev = [](double v, double e, double c) {
+        return v <= e ? Color(255, 0x4A, 0xDE, 0x80)
+                      : v <= c ? Color(255, 0xFB, 0x92, 0x3C)
+                               : Color(255, 0xF8, 0x71, 0x71);
+    };
+    auto fmt = [](const Metric& m, const wchar_t* f, wchar_t* out, size_t n) {
+        if (!m.valid) wcscpy_s(out, n, L"--");
+        else swprintf_s(out, n, f, (double)m.current);
+    };
+
+    int y = kPad;
+
+    // ── 硬件监控 ──
+    {
+        GraphicsPath card;
+        RoundedRect(card, (float)kPad, (float)y, (float)(kPanelW - kPad * 2), (float)kMetricsH, 8.f);
+        SolidBrush bgc(kSection);
+        g.FillPath(&bgc, &card);
+        Pen cpb(kBorder, 1.f);
+        g.DrawPath(&cpb, &card);
+        SolidBrush bar(kAccent);
+        g.FillRectangle(&bar, (float)kPad + 14, (float)y + 9, 3.f, 12.f);
+        DrawStr(g, L"硬件监控", secFont, (float)kPad + 24, (float)y + 6, kText);
+
+        wchar_t b[2][24];
+        int gy = y + 34;
+        int gx0 = kPad + 26, gx1 = kPad + 176;
+        auto cell = [&](int cx, int cy, const wchar_t* name, const wchar_t* val, const Color& c) {
+            DrawStr(g, name, lblFont, (float)cx, (float)cy, kSub);
+            DrawStr(g, val, valFont, (float)cx, (float)cy + 18, c);
+        };
+        fmt(g_snap.power, L"%.1f W", b[0], 24);
+        cell(gx0, gy, L"功耗", b[0], sev(g_snap.power.current, 45, 72));
+        fmt(g_snap.fan, L"%.0f RPM", b[1], 24);
+        cell(gx1, gy, L"风扇", b[1], sev(g_snap.fan.current, 3200, 4800));
+        gy += 34;
+        fmt(g_snap.cpuUsage, L"%.0f%%", b[0], 24);
+        cell(gx0, gy, L"CPU 占用", b[0], sev(g_snap.cpuUsage.current, 70, 90));
+        fmt(g_snap.cpuTemp, L"%.0f°C", b[1], 24);
+        cell(gx1, gy, L"CPU 温度", b[1], sev(g_snap.cpuTemp.current, 75, 90));
+        gy += 34;
+        fmt(g_snap.mem, L"%.0f%%", b[0], 24);
+        cell(gx0, gy, L"内存", b[0], sev(g_snap.mem.current, 70, 90));
+        wchar_t d[12] = {}, u[12] = {};
+        fmt(g_snap.netDown, L"%.0f", d, 12);
+        fmt(g_snap.netUp, L"%.0f", u, 12);
+        swprintf_s(b[1], L"↓%s ↑%s KB/s", d, u);
+        cell(gx1, gy, L"网速", b[1], Color(255, 0xFF, 0xFF, 0xFF));
+        y += kMetricsH + 8;
     }
+
+    // ── 显示器卡片 ──
+    for (auto& card : g_cards) {
+        GraphicsPath cp;
+        RoundedRect(cp, (float)kPad, (float)y, (float)(kPanelW - kPad * 2), (float)card.height, 8.f);
+        SolidBrush bgc(kSection);
+        g.FillPath(&bgc, &cp);
+        Pen cpb(kBorder, 1.f);
+        g.DrawPath(&cpb, &cp);
+        SolidBrush bar(kAccent);
+        g.FillRectangle(&bar, (float)kPad + 14, (float)y + 9, 3.f, 12.f);
+        DrawStr(g, card.title, bigVal, (float)kPad + 24, (float)y + 5, kText);
+
+        int row = 0;
+        auto rowY = [&](int r) { return y + kCardHead + 6 + r * kRowH; };
+        for (auto& s : card.sliders) {
+            int cy = rowY(row);
+            const wchar_t* name = s.code == ddc::kVcpLuminance ? L"亮度" :
+                                  s.code == ddc::kVcpContrast ? L"对比度" : L"音量";
+            DrawStr(g, name, lblFont, (float)(kPad + 18), (float)(cy - 8), kSub);
+            DrawSliderBar(g, s);
+            wchar_t pbuf[16] = {};
+            swprintf_s(pbuf, L"%d%%", s.pct);
+            DrawStr(g, pbuf, valFont, (float)(kPanelW - kPad - 44), (float)(cy - 9), kText);
+            row++;
+        }
+        for (auto& b : card.buttons) {
+            int cy = rowY(row);
+            DrawStr(g, b.kind == kBtnInput ? L"输入源" : L"电源", lblFont,
+                    (float)(kPad + 18), (float)(cy - 8), kSub);
+            DrawButton(g, b);
+            row++;
+        }
+        y += card.height + 8;
+    }
+
+    // ── 色温 ──
+    {
+        GraphicsPath card;
+        RoundedRect(card, (float)kPad, (float)y, (float)(kPanelW - kPad * 2), (float)kCtH, 8.f);
+        SolidBrush bgc(kSection);
+        g.FillPath(&bgc, &card);
+        Pen cpb(kBorder, 1.f);
+        g.DrawPath(&cpb, &card);
+        SolidBrush bar(kAccent);
+        g.FillRectangle(&bar, (float)kPad + 14, (float)y + 9, 3.f, 12.f);
+        DrawStr(g, L"色温护眼", secFont, (float)kPad + 24, (float)y + 6, kText);
+
+        wchar_t ct[64] = {};
+        if (g_ctEnabled)
+            swprintf_s(ct, L"已启用 · %dK", g_ctKelvin);
+        else
+            wcscpy_s(ct, L"未启用（设置中开启）");
+        DrawStr(g, ct, lblFont, (float)kPad + 18, (float)(y + 32), kSub);
+        DrawButton(g, g_ctPlus);
+        DrawButton(g, g_ctMinus);
+        DrawButton(g, g_ctToggle);
+        y += kCtH + 8;
+    }
+
+    // ── 底部操作 ──
+    for (auto& b : g_footer)
+        DrawButton(g, b);
 }
 
 void DrawWindow(HWND hwnd) {
@@ -248,7 +424,9 @@ void DrawWindow(HWND hwnd) {
     HGDIOBJ old = SelectObject(memDC, dib);
     {
         Graphics g(memDC);
-        g.Clear(Color(255, 0x1A, 0x1E, 0x26));
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+        DrawPanel(g);
     }
     HDC wdc = GetDC(hwnd);
     BitBlt(wdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
@@ -259,52 +437,77 @@ void DrawWindow(HWND hwnd) {
     ReleaseDC(nullptr, screenDC);
 }
 
+// ── 交互 ─────────────────────────────────────────────────────
+void PostAction(UINT action) {
+    if (g_host)
+        PostMessageW(g_host, mainwin::kActionMsg, (WPARAM)action, 0);
+}
+
+void OnButton(PanelBtn* b) {
+    if (!b)
+        return;
+    if (b->kind == kBtnAction) {
+        PostAction(b->action);
+    } else if (b->kind == kBtnInput) {
+        for (auto& card : g_cards)
+            for (auto& cb : card.buttons)
+                if (&cb == b)
+                    ddc::Ddc::SetVCP(card.deviceName, ddc::kVcpInputSource, (DWORD)b->value);
+    } else if (b->kind == kBtnPower) {
+        for (auto& card : g_cards)
+            for (auto& cb : card.buttons)
+                if (&cb == b)
+                    ddc::Ddc::SetVCP(card.deviceName, ddc::kVcpPower, 0x01);
+    }
+}
+
+void ApplySlider(int cardIdx, int sliderIdx) {
+    if (cardIdx < 0 || cardIdx >= (int)g_cards.size())
+        return;
+    auto& card = g_cards[cardIdx];
+    if (sliderIdx < 0 || sliderIdx >= (int)card.sliders.size())
+        return;
+    auto& s = card.sliders[sliderIdx];
+    ddc::Ddc::SetVCP(card.deviceName, s.code, (DWORD)s.pct);
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-        case WM_COMMAND: {
-            int id = LOWORD(wp);
-            int mi = (id >> 8) & 0xFF;
-            // 动作按钮
-            if (id >= (int)mainwin::ActionSettings && id <= (int)mainwin::ActionExit) {
-                if (g_host)
-                    PostMessageW(g_host, mainwin::kActionMsg, (WPARAM)id, 0);
-                return 0;
+        case WM_LBUTTONDOWN: {
+            int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            PanelBtn* btn = nullptr;
+            if (HitSlider(x, y, g_dragCard, g_dragSlider)) {
+                g_dragging = true;
+                SetCapture(hwnd);
+                auto& s = g_cards[g_dragCard].sliders[g_dragSlider];
+                int sw = (int)(s.rc.right - s.rc.left);
+                s.pct = std::clamp((int)((x - s.rc.left) * 100) / std::max(1, sw), 0, 100);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (HitButton(x, y, &btn)) {
+                OnButton(btn);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
-            // 输入源按钮
-            if ((id & 0xFF0000) == kIdInputBase && mi < (int)g_cards.size()) {
-                int value = id & 0xFF;
-                ddc::Ddc::SetVCP(g_cards[mi].deviceName, ddc::kVcpInputSource, (DWORD)value);
-                return 0;
-            }
-            // 电源按钮
-            if ((id & 0xFF0000) == kIdPowerBase && mi < (int)g_cards.size()) {
-                ddc::Ddc::SetVCP(g_cards[mi].deviceName, ddc::kVcpPower, 0x01);   // 关闭
-                return 0;
-            }
-            break;
+            return 0;
         }
-        case WM_HSCROLL: {
-            HWND src = (HWND)lp;
-            int id = GetDlgCtrlID(src);
-            int mi = (id >> 8) & 0xFF;
-            int code = id & 0xFF;
-            if ((id & 0xFF0000) == kIdTrackBase && mi < (int)g_cards.size()) {
-                auto& card = g_cards[mi];
-                auto it = std::find_if(card.sliders.begin(), card.sliders.end(),
-                                       [&](const SliderCtl& s) { return s.track == src; });
-                if (it != card.sliders.end()) {
-                    int pos = (int)SendMessageW(src, TBM_GETPOS, 0, 0);
-                    int pct = std::clamp(pos / 10, 0, 100);
-                    wchar_t buf[16] = {};
-                    swprintf_s(buf, L"%d%%", pct);
-                    SetWindowTextW(it->label, buf);
-                    if (LOWORD(wp) == TB_THUMBTRACK)
-                        card.dragging = true;
-                    if (LOWORD(wp) == TB_ENDTRACK) {
-                        card.dragging = false;
-                        ddc::Ddc::SetVCP(card.deviceName, (BYTE)code, (DWORD)pct);
-                    }
+        case WM_MOUSEMOVE: {
+            if (g_dragging && g_dragCard >= 0 && g_dragSlider >= 0) {
+                int x = GET_X_LPARAM(lp);
+                auto& s = g_cards[g_dragCard].sliders[g_dragSlider];
+                int sw = (int)(s.rc.right - s.rc.left);
+                int pct = std::clamp((int)((x - s.rc.left) * 100) / std::max(1, sw), 0, 100);
+                if (pct != s.pct) {
+                    s.pct = pct;
+                    InvalidateRect(hwnd, nullptr, FALSE);
                 }
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (g_dragging) {
+                ApplySlider(g_dragCard, g_dragSlider);
+                g_dragging = false;
+                g_dragCard = g_dragSlider = -1;
+                ReleaseCapture();
             }
             return 0;
         }
@@ -316,7 +519,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_ERASEBKGND:
-            return 1;   // 自绘背景
+            return 1;
         case WM_CLOSE:
             ShowWindow(hwnd, SW_HIDE);
             return 0;
@@ -339,14 +542,6 @@ bool Create(HINSTANCE hInst) {
     if (Gdiplus::GdiplusStartup((ULONG_PTR*)&g_gdiToken, &gsi, nullptr) != Gdiplus::Ok)
         return false;
 
-    INITCOMMONCONTROLSEX icc{ sizeof(icc), ICC_BAR_CLASSES };
-    InitCommonControlsEx(&icc);
-
-    NONCLIENTMETRICSW ncm{};
-    ncm.cbSize = sizeof(ncm);
-    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-        g_uiFont = CreateFontIndirectW(&ncm.lfMessageFont);
-
     WNDCLASSW wc{};
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
@@ -354,9 +549,9 @@ bool Create(HINSTANCE hInst) {
     wc.lpszClassName = kMainWinClass;
     RegisterClassW(&wc);
 
-    g_hwnd = CreateWindowExW(0, kMainWinClass, L"机械革命监控 - 显示器控制",
+    g_hwnd = CreateWindowExW(0, kMainWinClass, L"机械革命监控",
                              WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-                             CW_USEDEFAULT, CW_USEDEFAULT, kClientW + 16, 320,
+                             CW_USEDEFAULT, CW_USEDEFAULT, kPanelW + 16, 420,
                              nullptr, nullptr, hInst, nullptr);
     if (!g_hwnd)
         return false;
@@ -373,7 +568,7 @@ void Show() {
         return;
     if (IsWindowVisible(g_hwnd)) {
         SetForegroundWindow(g_hwnd);
-        RebuildPanel();   // 打开时刷新显示器列表
+        RebuildPanel();
         return;
     }
     RECT wa{};
@@ -399,10 +594,34 @@ bool IsVisible() {
 
 HWND Hwnd() { return g_hwnd; }
 
-void Refresh() {
-    if (!g_hwnd || !IsWindowVisible(g_hwnd))
+void Refresh(const SampleSet& s) {
+    if (!g_hwnd)
         return;
-    RefreshValues();
+    g_snap = s;   // 始终保存最新数据；仅可见时重绘与读 DDC
+    if (!IsWindowVisible(g_hwnd))
+        return;
+    // 显示器数值刷新（滑块未拖动时）
+    if (!g_dragging) {
+        std::vector<ddc::Monitor> ms = ddc::Ddc::Enumerate();
+        for (size_t c = 0; c < g_cards.size() && c < ms.size(); c++) {
+            for (auto& sl : g_cards[c].sliders) {
+                DWORD cur = 0, max = 0;
+                if (!ddc::Ddc::GetVCP(g_cards[c].deviceName, sl.code, cur, max))
+                    continue;
+                if (max == 0) max = 100;
+                sl.pct = (int)std::lround(cur * 100.0 / max);
+            }
+        }
+    }
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+}
+
+// 色温状态注入（宿主 kSampleMsg 调用，查询 colortemp 后传入）
+void SetColorTemp(bool enabled, int kelvin) {
+    g_ctEnabled = enabled;
+    g_ctKelvin = kelvin;
+    if (g_hwnd && IsWindowVisible(g_hwnd))
+        InvalidateRect(g_hwnd, nullptr, FALSE);
 }
 
 void Rebuild() {
@@ -414,10 +633,6 @@ void DestroyWindowW() {
     if (g_hwnd) {
         DestroyWindow(g_hwnd);
         g_hwnd = nullptr;
-    }
-    if (g_uiFont) {
-        DeleteObject(g_uiFont);
-        g_uiFont = nullptr;
     }
     if (g_gdiToken) {
         Gdiplus::GdiplusShutdown((ULONG_PTR)g_gdiToken);

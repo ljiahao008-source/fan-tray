@@ -216,6 +216,13 @@ void ColorTemperatureManager::TogglePause() {
         SetEvent(_wakeEvent);
 }
 
+void ColorTemperatureManager::GetState(bool& enabled, int& kelvin) const {
+    EnterCriticalSection((CRITICAL_SECTION*)&_lock);
+    enabled = _running && _settings.enabled && !_paused;
+    kelvin = _lastAppliedK > 0 ? _lastAppliedK : (int)_settings.dayTemperature;
+    LeaveCriticalSection((CRITICAL_SECTION*)&_lock);
+}
+
 bool ColorTemperatureManager::HandleHotkey(UINT msg, WPARAM wp) {
     if (msg != WM_HOTKEY)
         return false;
