@@ -32,7 +32,7 @@ constexpr wchar_t kThemeKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\
 constexpr int kGapPx = 2;          // 与托盘角落间距
 constexpr int kPairGap = 6;        // 功耗/风扇两块的间距
 constexpr int kTextPad = 1;        // 文本四周留白（块宽 = 文本宽 + 2*pad）
-constexpr int kTipW = 216, kTipH = 118;
+constexpr int kTipW = 216, kTipH = 132;
 
 Color MakeColor(BYTE a, BYTE r, BYTE g, BYTE b) { return Color(a, r, g, b); }
 
@@ -256,7 +256,7 @@ const wchar_t* Widget::ItemTitle(int idx) {
         case ItemKind::CpuUsage: return L"CPU 占用";
         case ItemKind::CpuTemp: return L"CPU 温度";
         case ItemKind::Mem: return L"内存占用";
-        case ItemKind::Net: return L"网络速度（下行/上行）";
+        case ItemKind::Net: return L"网络速度";
         default: return L"";
     }
 }
@@ -299,10 +299,10 @@ void Widget::FormatValue(int idx, const Metric& m, float netUp, wchar_t* buf, si
             swprintf_s(buf, cch, L"%.0f", (double)m.current);
             break;
         case ItemKind::Net: {
-            wchar_t d[16] = {}, u[16] = {};
+            // 只取下行（↑上行由任务栏垂直行/卡片单独显示）
+            wchar_t d[16] = {};
             FmtSpeed(m.current, d, 16);
-            FmtSpeed(netUp, u, 16);
-            swprintf_s(buf, cch, L"↓%s↑%s", d, u);
+            swprintf_s(buf, cch, L"↓%s", d);
             break;
         }
         default:
@@ -334,7 +334,7 @@ void Widget::MeasureBlocks(HDC screenDC) {
         L"100",            // 占用
         L"100",            // 温度
         L"100",            // 内存
-        L"↓8888↑8888",     // 网速（下行↑上行）
+        L"↓888.8M",        // 网速（下行，垂直堆叠单值）
     };
     HDC mdc = CreateCompatibleDC(screenDC);
     FontFamily ffVal(L"Segoe UI");
@@ -413,6 +413,34 @@ void Widget::Render() {
             if (_hovering && _hoverIdx == i) {
                 SolidBrush hb(_hoverBack);
                 g.FillRectangle(&hb, (float)x0, 1.f, (float)bw, (float)(height - 2));
+            }
+
+            // 网速块：垂直堆叠（下行在上 / 上行在下），无标签行
+            if ((ItemKind)i == ItemKind::Net) {
+                wchar_t d[24] = {}, u[24] = {};
+                if (m.valid)
+                    FmtSpeed(m.current, d, 24);
+                else
+                    wcscpy_s(d, L"--");
+                if (_netUpValid)
+                    FmtSpeed(_netUp, u, 24);
+                else
+                    wcscpy_s(u, L"--");
+
+                InkBox db = MeasureInk(mdcInk, valFont, d);
+                InkBox ub = MeasureInk(mdcInk, valFont, u);
+
+                Color dcColor = m.valid ? _sevGreen : _labelColor;              // 下行：绿
+                Color ucColor = _netUpValid ? MakeColor(255, 0x4A, 0x9E, 0xDE)
+                                            : _labelColor;                      // 上行：青蓝
+                SolidBrush dBrush(dcColor);
+                SolidBrush uBrush(ucColor);
+
+                float dx = x0 + (bw - db.w) / 2.f - db.x;
+                g.DrawString(d, -1, &valFont, PointF(dx, (float)(height / 2 - 15)), &dBrush);
+                float ux = x0 + (bw - ub.w) / 2.f - ub.x;
+                g.DrawString(u, -1, &valFont, PointF(ux, (float)(height / 2 + 2)), &uBrush);
+                continue;
             }
 
             wchar_t vbuf[40] = {};
@@ -758,6 +786,25 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 // 中部：60 拍趋势图（参照 GlintBar 悬停弹出大图 + 统计）
                 const std::vector<float>& hist = self->_hist[idx];
                 float gx = 14.f, gy = 38.f, gw = (float)w - 28.f, gh = 40.f;
+
+                // 网速项：标题行下方补一行「上行 xx KB/s」（下行走标题/趋势图/统计主线）
+                bool isNet = ((ItemKind)idx == ItemKind::Net);
+                if (isNet) {
+                    gy = 52.f;
+                    wchar_t upLine[48] = {};
+                    if (self->_netUpValid) {
+                        wchar_t ub2[16] = {};
+                        FmtSpeed(self->_netUp, ub2, 16);
+                        swprintf_s(upLine, L"↑%s KB/s 上行", ub2);
+                    } else {
+                        wcscpy_s(upLine, L"上行 -- KB/s");
+                    }
+                    FontFamily ffS(L"Segoe UI");
+                    Font upFont(&ffS, 11.f, Gdiplus::FontStyleRegular, UnitPixel);
+                    SolidBrush upBrush(Color(0xC0, 0x4A, 0x9E, 0xDE));   // 青蓝（与任务栏上行色一致）
+                    g.DrawString(upLine, -1, &upFont, PointF(28.f, 31.f), &upBrush);
+                }
+
                 if (!hist.empty()) {
                     float vmin = hist[0], vmax = hist[0];
                     for (float v : hist) {

@@ -88,53 +88,79 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
 
     HWND dlg = CreateWindowExW(0, kDlgClass, L"机械革命监控 - 设置",
                                WS_CAPTION | WS_SYSMENU | WS_OVERLAPPED | WS_VISIBLE,
-                               CW_USEDEFAULT, CW_USEDEFAULT, 348, 306,
+                               CW_USEDEFAULT, CW_USEDEFAULT, 362, 372,
                                parent, nullptr, hInst, &ctx);
     if (!dlg)
         return false;
     // 置前：从托盘菜单弹出时确保可见可交互
     SetForegroundWindow(dlg);
 
-    // —— 刷新间隔 ——
-    CreateWindowExW(0, L"STATIC", L"刷新间隔（毫秒，250~60000）：",
-                    WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 18, 220, 18, dlg, nullptr, hInst, nullptr);
+    // —— 统一 UI 字体（Segoe UI / 系统消息字体）——
+    NONCLIENTMETRICSW ncm{};
+    ncm.cbSize = sizeof(ncm);
+    HFONT uiFont = nullptr;
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+        uiFont = CreateFontIndirectW(&ncm.lfMessageFont);
+    auto addCtrl = [&](const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w,
+                       int h, int id) -> HWND {
+        HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, dlg,
+                                 (HMENU)(INT_PTR)id, hInst, nullptr);
+        if (uiFont)
+            SendMessageW(c, WM_SETFONT, (WPARAM)uiFont, TRUE);
+        return c;
+    };
+    auto addGroup = [&](const wchar_t* text, int x, int y, int w, int h) {
+        HWND c = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | BS_GROUPBOX, x, y, w, h,
+                                 dlg, nullptr, hInst, nullptr);
+        if (uiFont)
+            SendMessageW(c, WM_SETFONT, (WPARAM)uiFont, TRUE);
+        return c;
+    };
+
+    // —— 分组一：采样 ——
+    addGroup(L"采样", 14, 8, 320, 62);
+    addCtrl(L"STATIC", L"刷新间隔（毫秒，250~60000）：", SS_LEFT, 26, 32, 210, 18, 0);
     wchar_t msBuf[16] = {};
     swprintf_s(msBuf, L"%d", cfg.RefreshIntervalMs);
     ctx.edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", msBuf,
                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
-                               244, 16, 80, 22, dlg, (HMENU)(INT_PTR)kIdIntervalEdit, hInst, nullptr);
+                               252, 30, 70, 22, dlg, (HMENU)(INT_PTR)kIdIntervalEdit, hInst, nullptr);
+    if (uiFont)
+        SendMessageW(ctx.edit, WM_SETFONT, (WPARAM)uiFont, TRUE);
 
-    // —— 开机自启 ——
-    ctx.check = CreateWindowExW(0, L"BUTTON", L"开机自启（计划任务，登录即提权）",
-                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                20, 50, 300, 22, dlg, (HMENU)(INT_PTR)kIdAutoStartCheck, hInst, nullptr);
-    SendMessageW(ctx.check, BM_SETCHECK, cfg.AutoStart ? BST_CHECKED : BST_UNCHECKED, 0);
-
-    // —— 任务栏显示项（两列三行）——
-    CreateWindowExW(0, L"STATIC", L"任务栏显示项（数值在上、标签在下，从左到右排列）：",
-                    WS_CHILD | WS_VISIBLE | SS_LEFT, 20, 82, 300, 18, dlg, nullptr, hInst, nullptr);
-
-    struct { const wchar_t* text; bool on; int x, y; } items[6] = {
-        { L"功耗", cfg.ShowPower, 20, 106 },
-        { L"风扇转速", cfg.ShowFan, 180, 106 },
-        { L"CPU 占用", cfg.ShowCpuUsage, 20, 132 },
-        { L"CPU 温度", cfg.ShowCpuTemp, 180, 132 },
-        { L"内存占用", cfg.ShowMem, 20, 158 },
-        { L"网速上下行", cfg.ShowNet, 180, 158 },
+    // —— 分组二：任务栏显示项 ——
+    addGroup(L"任务栏显示项（数值在上、标签在下，从左到右排列）", 14, 76, 320, 150);
+    struct ShowItem {
+        const wchar_t* text;
+        bool on;
+        int x, y;
+        HWND* slot;
+    };
+    ShowItem shows[6] = {
+        { L"功耗", cfg.ShowPower, 28, 100, &ctx.show[0] },
+        { L"风扇转速", cfg.ShowFan, 172, 100, &ctx.show[1] },
+        { L"CPU 占用", cfg.ShowCpuUsage, 28, 126, &ctx.show[2] },
+        { L"CPU 温度", cfg.ShowCpuTemp, 172, 126, &ctx.show[3] },
+        { L"内存占用", cfg.ShowMem, 28, 152, &ctx.show[4] },
+        { L"网速上下行", cfg.ShowNet, 172, 152, &ctx.show[5] },
     };
     for (int i = 0; i < 6; i++) {
-        ctx.show[i] = CreateWindowExW(0, L"BUTTON", items[i].text,
-                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                      items[i].x, items[i].y, 150, 22, dlg,
-                                      (HMENU)(INT_PTR)(kIdShowBase + i), hInst, nullptr);
-        SendMessageW(ctx.show[i], BM_SETCHECK, items[i].on ? BST_CHECKED : BST_UNCHECKED, 0);
+        *shows[i].slot = addCtrl(L"BUTTON", shows[i].text,
+                                 WS_TABSTOP | BS_AUTOCHECKBOX, shows[i].x, shows[i].y, 142, 22,
+                                 kIdShowBase + i);
+        SendMessageW(*shows[i].slot, BM_SETCHECK, shows[i].on ? BST_CHECKED : BST_UNCHECKED, 0);
     }
+    addCtrl(L"STATIC", L"取消勾选的项目不会显示在任务栏上。", SS_LEFT, 28, 178, 280, 16, 0);
+
+    // —— 分组三：启动 ——
+    addGroup(L"启动", 14, 232, 320, 56);
+    ctx.check = addCtrl(L"BUTTON", L"开机自启（计划任务，登录即提权）",
+                        WS_TABSTOP | BS_AUTOCHECKBOX, 26, 252, 290, 22, kIdAutoStartCheck);
+    SendMessageW(ctx.check, BM_SETCHECK, cfg.AutoStart ? BST_CHECKED : BST_UNCHECKED, 0);
 
     // —— 按钮 ——
-    CreateWindowExW(0, L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                    132, 196, 82, 28, dlg, (HMENU)(INT_PTR)kIdOk, hInst, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    226, 196, 82, 28, dlg, (HMENU)(INT_PTR)kIdCancel, hInst, nullptr);
+    addCtrl(L"BUTTON", L"确定", WS_TABSTOP | BS_DEFPUSHBUTTON, 130, 298, 82, 28, kIdOk);
+    addCtrl(L"BUTTON", L"取消", WS_TABSTOP | BS_PUSHBUTTON, 226, 298, 82, 28, kIdCancel);
 
     SetFocus(ctx.edit);
 
@@ -153,5 +179,7 @@ bool ShowSettingsDialog(HWND parent, AppConfig& cfg) {
         EnableWindow(parent, TRUE);
 
     DestroyWindow(dlg);
+    if (uiFont)
+        DeleteObject(uiFont);
     return ctx.ok;
 }

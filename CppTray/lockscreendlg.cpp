@@ -263,27 +263,34 @@ void BuildControls(HWND hwnd) {
                  L"锁屏后、闲置后多久关闭屏幕或进入睡眠。修改立即生效，无需重启。",
                  24, 46, 552, 20, g.hFontSmall, page);
 
-        MakeText(hwnd, L"项目", 28, 76, 100, 18, g.hFontSmall, page);
-        MakeText(hwnd, L"接通电源", 150, 76, 140, 18, g.hFontSmall, page, SS_CENTER);
-        MakeText(hwnd, L"使用电池", 300, 76, 140, 18, g.hFontSmall, page, SS_CENTER);
+        // 分组框包住设置表（视觉分区）
+        HWND group = CreateWindowExW(0, L"BUTTON", L"电源设置",
+                                     WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+                                     S(16), S(70), S(568), S(196), hwnd, nullptr, nullptr, nullptr);
+        SendMessageW(group, WM_SETFONT, (WPARAM)g.hFont, TRUE);
+        g.controls[page].push_back(group);
+
+        MakeText(hwnd, L"项目", 30, 96, 100, 18, g.hFontSmall, page);
+        MakeText(hwnd, L"接通电源", 152, 96, 140, 18, g.hFontSmall, page, SS_CENTER);
+        MakeText(hwnd, L"使用电池", 302, 96, 140, 18, g.hFontSmall, page, SS_CENTER);
 
         for (int i = 0; i < (int)PowerKey::Count; i++) {
-            int y = 96 + i * 34;
-            g.powerLabel[i] = MakeText(hwnd, PowerKeyName((PowerKey)i), 28, y + 4, 118, 20, g.hFont, page);
-            g.powerAc[i] = MakeCombo(hwnd, kIdPowerAcBase + i * 3, 150, y, 140, 200, page);
-            g.powerDc[i] = MakeCombo(hwnd, kIdPowerDcBase + i * 3, 300, y, 140, 200, page);
+            int y = 116 + i * 34;
+            g.powerLabel[i] = MakeText(hwnd, PowerKeyName((PowerKey)i), 30, y + 4, 118, 20, g.hFont, page);
+            g.powerAc[i] = MakeCombo(hwnd, kIdPowerAcBase + i * 3, 152, y, 140, 200, page);
+            g.powerDc[i] = MakeCombo(hwnd, kIdPowerDcBase + i * 3, 302, y, 140, 200, page);
         }
 
-        MakeText(hwnd, L"（「永不」= 不执行该动作）", 28, 236, 400, 18, g.hFontSmall, page);
+        MakeText(hwnd, L"（「永不」= 不执行该动作）", 30, 250, 400, 18, g.hFontSmall, page);
 
-        MakeButton(hwnd, L"全部设为永不", kIdNeverAll, 28, 260, 110, 28, page);
-        MakeButton(hwnd, L"恢复电源计划默认", kIdRestore, 146, 260, 140, 28, page);
-        MakeButton(hwnd, L"刷新", kIdRefresh, 294, 260, 80, 28, page);
+        MakeButton(hwnd, L"全部设为永不", kIdNeverAll, 30, 272, 110, 28, page);
+        MakeButton(hwnd, L"恢复电源计划默认", kIdRestore, 148, 272, 140, 28, page);
+        MakeButton(hwnd, L"刷新", kIdRefresh, 296, 272, 80, 28, page);
 
         MakeText(hwnd,
                  L"说明：「恢复电源计划默认」会把当前电源方案的所有项目恢复为系统默认值，"
                  L"影响范围大于本页设置，请谨慎使用。",
-                 28, 298, 540, 36, g.hFontSmall, page);
+                 28, 310, 540, 36, g.hFontSmall, page);
     }
 
     // ===== 页面 1：屏幕保护 =====
@@ -397,19 +404,24 @@ void RefreshPowerPage() {
         }
         SetWindowTextW(g.powerLabel[i], label.c_str());
         EnableWindow(g.powerAc[i], avail);
-        EnableWindow(g.powerDc[i], avail && g.hasBattery);
+        EnableWindow(g.powerDc[i], avail);
 
+        // 以 powercfg 实际返回的数据驱动 UI：
+        //   AC/DC 任一侧无值（powercfg 未输出该行 = 系统无电池/不支持）→ 显示「不适用」占位，
+        //   不再依赖 BatteryFlag 猜测电池存在性（其实测不稳定，曾出现空白框）
         if (!avail)
             fillPlaceholder(g.powerAc[i], L"未启用");
-        else
+        else if (ps.ac)
             FillComboWithSeconds(g.powerAc[i], ps.ac);
-
-        if (!g.hasBattery)
-            fillPlaceholder(g.powerDc[i], L"无电池");
-        else if (!avail)
-            fillPlaceholder(g.powerDc[i], L"未启用");
         else
+            fillPlaceholder(g.powerAc[i], L"不适用");
+
+        if (!avail)
+            fillPlaceholder(g.powerDc[i], L"未启用");
+        else if (ps.dc)
             FillComboWithSeconds(g.powerDc[i], ps.dc);
+        else
+            fillPlaceholder(g.powerDc[i], L"不适用");
     }
     g.loading = false;
 }
