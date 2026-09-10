@@ -51,6 +51,7 @@ private:
     Thresholds _thr;
     bool _hasData = false;
     int _lastX = 0, _lastW = 0, _lastH = 0;
+    std::vector<float> _powerHist, _fanHist;   // 60 拍滚动历史（悬浮窗趋势图）
 
     // 布局（px，96 DPI 基准，Position 时按 DPI 缩放）
     int _powerBlockW = 60;

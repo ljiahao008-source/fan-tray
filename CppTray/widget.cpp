@@ -2,6 +2,7 @@
 
 #include <windowsx.h>
 #include <cmath>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,6 @@ using Gdiplus::RectF;
 using Gdiplus::SmoothingMode;
 using Gdiplus::SolidBrush;
 using Gdiplus::StringFormat;
-using Gdiplus::StringAlignment;
 using Gdiplus::TextRenderingHint;
 using Gdiplus::UnitPixel;
 
@@ -30,9 +30,9 @@ constexpr wchar_t kTipClass[] = L"MechrevoTrayTipClass";
 constexpr wchar_t kThemeKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 
 constexpr int kGapPx = 2;          // 与托盘角落间距
-constexpr int kPairGap = 1;        // 功耗/风扇两块的间距
-constexpr int kHoverPad = 3;       // 悬停热区余量
-constexpr int kTipW = 214, kTipH = 88;
+constexpr int kPairGap = 6;        // 功耗/风扇两块的间距
+constexpr int kTextPad = 1;        // 文本四周留白（块宽 = 文本宽 + 2*pad）
+constexpr int kTipW = 216, kTipH = 118;
 
 Color MakeColor(BYTE a, BYTE r, BYTE g, BYTE b) { return Color(a, r, g, b); }
 
@@ -63,10 +63,30 @@ HBITMAP CreateDib(HDC dc, int w, int h, void** bits) {
     return CreateDIBSection(dc, &bi, DIB_RGB_COLORS, bits, nullptr, 0);
 }
 
-int MeasureText(Gdiplus::Graphics& g, const wchar_t* text, const Font& font) {
-    RectF rect;
-    g.MeasureString(text, -1, &font, PointF(0, 0), &rect);
-    return (int)std::ceil(rect.Width) + 2;
+// 用 MeasureCharacterRanges 实测"墨迹盒"（X=墨迹相对绘制点的起始偏移, W=实际宽度）。
+// DrawString 渲染时墨迹占 [绘制点+X, 绘制点+X+W]：据此定块宽并手动居中绘制，
+// 既没有 MeasureString 的虚胖，也不会像 RectF 居中那样把超宽部分裁掉。
+struct InkBox { float x = 0.f, w = 0.f, y = 0.f, h = 0.f; };
+
+InkBox MeasureInk(HDC mdc, const Font& font, const wchar_t* text) {
+    InkBox box;
+    Gdiplus::Graphics g(mdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+    StringFormat sf;
+    sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoFitBlackBox);
+    Gdiplus::CharacterRange range{ 0, (INT)wcslen(text) };
+    sf.SetMeasurableCharacterRanges(1, &range);
+    RectF layout(0, 0, 1000.f, 100.f);
+    Gdiplus::Region regions[1];
+    g.MeasureCharacterRanges(text, -1, &font, layout, &sf, 1, regions);
+    RectF b;
+    regions[0].GetBounds(&b, &g);
+    box.x = b.X;
+    box.w = b.Width;
+    box.y = b.Y;
+    box.h = b.Height;
+    return box;
 }
 
 }  // namespace
@@ -157,6 +177,24 @@ void Widget::Update(const Metric& power, const Metric& fan) {
     _power = power;
     _fan = fan;
     _hasData = true;
+
+    // 60 拍滚动历史（供悬浮窗趋势图）；无效拍沿用上一值保持曲线连续
+    if (power.valid)
+        _powerHist.push_back(power.current);
+    else if (!_powerHist.empty())
+        _powerHist.push_back(_powerHist.back());
+    if (_powerHist.size() > 60)
+        _powerHist.erase(_powerHist.begin());
+    if (fan.valid)
+        _fanHist.push_back(fan.current);
+    else if (!_fanHist.empty())
+        _fanHist.push_back(_fanHist.back());
+    if (_fanHist.size() > 60)
+        _fanHist.erase(_fanHist.begin());
+
+    if (_tipHwnd && IsWindowVisible(_tipHwnd))
+        InvalidateRect(_tipHwnd, nullptr, FALSE);   // 悬停时趋势图随采样实时刷新
+
     Render();
 }
 
@@ -184,20 +222,29 @@ void Widget::Render() {
     FontFamily ffLbl(L"Microsoft YaHei UI");
     Font lblFont(&ffLbl, 9.f, Gdiplus::FontStyleRegular, UnitPixel);
 
-    // 测量内容宽度（固定最宽值防抖）
+    wchar_t pbuf[32] = {};
+    if (_power.valid)
+        swprintf_s(pbuf, L"%.1f", (double)_power.current);   // 托盘窗口不带单位，只显示数值
+    else
+        wcscpy_s(pbuf, L"--");
+
+    wchar_t fbuf[32] = {};
+    if (_fan.valid)
+        swprintf_s(fbuf, L"%.0f", (double)_fan.current);
+    else
+        wcscpy_s(fbuf, L"--");
+
+    // 块宽贴合实际墨迹（MeasureCharacterRanges）：居中且紧凑；位数进位只差几 px，窗口微调可接受
+    InkBox powerVal, powerLbl, fanVal, fanLbl;
     {
         HDC mdc = CreateCompatibleDC(screenDC);
-        Graphics g(mdc);
-        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        int pw = MeasureText(g, L"888.8W", valFont);
-        int fw = MeasureText(g, L"8888", valFont);
-        int lp = MeasureText(g, L"功耗", lblFont);
-        int lf = MeasureText(g, L"风扇", lblFont);
-        if (lp > pw) pw = lp;
-        if (lf > fw) fw = lf;
+        powerVal = MeasureInk(mdc, valFont, pbuf);
+        powerLbl = MeasureInk(mdc, lblFont, L"功耗");
+        fanVal = MeasureInk(mdc, valFont, fbuf);
+        fanLbl = MeasureInk(mdc, lblFont, L"风扇");
         DeleteDC(mdc);
-        _powerBlockW = pw + kHoverPad * 2;
-        _fanBlockW = fw + kHoverPad * 2;
+        _powerBlockW = (int)std::ceil(std::max(powerVal.w, powerLbl.w)) + kTextPad * 2;
+        _fanBlockW = (int)std::ceil(std::max(fanVal.w, fanLbl.w)) + kTextPad * 2;
         _contentW = _powerBlockW + kPairGap + _fanBlockW;
     }
 
@@ -221,40 +268,28 @@ void Widget::Render() {
         g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
         g.Clear(Color(0, 0, 0, 0));
 
-        auto DrawPair = [&](int x0, int bw, const wchar_t* valueText, const wchar_t* label,
+        auto DrawPair = [&](int x0, int bw, const InkBox& valInk, const InkBox& lblInk,
+                            const wchar_t* valueText, const wchar_t* label,
                             const Metric& m, double elevated, double critical, bool hover) {
             if (hover) {
                 SolidBrush hb(_hoverBack);
                 g.FillRectangle(&hb, (float)x0, 1.f, (float)bw, (float)(height - 2));
             }
 
-            StringFormat sf;
-            sf.SetAlignment(Gdiplus::StringAlignmentCenter);   // 数值/标签各自块内居中
-            RectF valRect((float)(x0 + kHoverPad), (float)(height / 2 - 12), (float)(bw - kHoverPad * 2), 18.f);
+            // 手动居中：墨迹盒宽 = 块宽-2*pad 时左右各留 1px；PointF 定位不裁剪
             Color vc = m.valid ? ValueColor(m.current, elevated, critical) : _labelColor;
             SolidBrush valBrush(vc);
-            g.DrawString(valueText, -1, &valFont, valRect, &sf, &valBrush);
+            float vx = x0 + (bw - valInk.w) / 2.f - valInk.x;
+            g.DrawString(valueText, -1, &valFont, PointF(vx, (float)(height / 2 - 12)), &valBrush);
 
-            RectF lblRect((float)(x0 + kHoverPad), (float)(height / 2 + 4), (float)(bw - kHoverPad * 2), 16.f);
             SolidBrush lblBrush(_labelColor);
-            g.DrawString(label, -1, &lblFont, lblRect, &sf, &lblBrush);
+            float lx = x0 + (bw - lblInk.w) / 2.f - lblInk.x;
+            g.DrawString(label, -1, &lblFont, PointF(lx, (float)(height / 2 + 4)), &lblBrush);
         };
 
-        wchar_t pbuf[32] = {};
-        if (_power.valid)
-            swprintf_s(pbuf, L"%.1fW", (double)_power.current);
-        else
-            wcscpy_s(pbuf, L"--");
-
-        wchar_t fbuf[32] = {};
-        if (_fan.valid)
-            swprintf_s(fbuf, L"%.0f", (double)_fan.current);
-        else
-            wcscpy_s(fbuf, L"--");
-
-        DrawPair(0, _powerBlockW, pbuf, L"功耗", _power, _thr.powerElevated, _thr.powerCritical,
+        DrawPair(0, _powerBlockW, powerVal, powerLbl, pbuf, L"功耗", _power, _thr.powerElevated, _thr.powerCritical,
                  _hovering && _hoverPower);
-        DrawPair(_powerBlockW + kPairGap, _fanBlockW, fbuf, L"风扇", _fan, _thr.fanElevated, _thr.fanCritical,
+        DrawPair(_powerBlockW + kPairGap, _fanBlockW, fanVal, fanLbl, fbuf, L"风扇", _fan, _thr.fanElevated, _thr.fanCritical,
                  _hovering && !_hoverPower);
     }
 
@@ -514,17 +549,19 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);   // 透明表面：灰度抗锯齿+网格拟合
                 g.Clear(Color(0, 0, 0, 0));
 
-                // 深色圆角卡片
+                // 深色圆角卡片：竖向渐变（上浅下深）+ 柔和细边框
                 GraphicsPath path;
-                int rad = 10;
+                int rad = 12;
                 path.AddArc(0, 0, rad * 2, rad * 2, 180, 90);
                 path.AddArc(w - rad * 2, 0, rad * 2, rad * 2, 270, 90);
                 path.AddArc(w - rad * 2, h - rad * 2, rad * 2, rad * 2, 0, 90);
                 path.AddArc(0, h - rad * 2, rad * 2, rad * 2, 90, 90);
                 path.CloseFigure();
-                SolidBrush cardBrush(Color(0xF2, 0x17, 0x24, 0x2F));
-                g.FillPath(&cardBrush, &path);
-                Pen borderPen(Color(0x2E, 0xFF, 0xFF, 0xFF), 1.f);
+                Gdiplus::LinearGradientBrush bgBrush(PointF(0, 0), PointF(0, (float)h),
+                                                     Color(0xF2, 0x23, 0x29, 0x35),
+                                                     Color(0xF2, 0x15, 0x19, 0x20));
+                g.FillPath(&bgBrush, &path);
+                Pen borderPen(Color(0x26, 0xFF, 0xFF, 0xFF), 1.f);
                 g.DrawPath(&borderPen, &path);
 
                 const Metric& m = self->_hoverPower ? self->_power : self->_fan;
@@ -539,24 +576,71 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     wcscpy_s(cur, L"--");
 
                 FontFamily ffLbl(L"Microsoft YaHei UI");
-                Font titleFont(&ffLbl, 12.f, Gdiplus::FontStyleRegular, UnitPixel);
+                Font titleFont(&ffLbl, 13.f, Gdiplus::FontStyleRegular, UnitPixel);
                 FontFamily ffVal(L"Segoe UI");
-                Font valFont(&ffVal, 20.f, Gdiplus::FontStyleBold, UnitPixel);
-                Font statFont(&ffVal, 13.f, Gdiplus::FontStyleBold, UnitPixel);
-                Font smallFont(&ffLbl, 10.f, Gdiplus::FontStyleRegular, UnitPixel);
+                Font valFont(&ffVal, 18.f, Gdiplus::FontStyleBold, UnitPixel);
+                Font statFont(&ffVal, 14.f, Gdiplus::FontStyleBold, UnitPixel);
+                Font smallFont(&ffLbl, 11.f, Gdiplus::FontStyleRegular, UnitPixel);
 
-                SolidBrush titleBrush(Color(0xC8, 0xFF, 0xFF, 0xFF));
+                SolidBrush titleBrush(Color(0xD6, 0xFF, 0xFF, 0xFF));
                 Color vc = has ? (self->_hoverPower
                                       ? self->ValueColor(m.current, self->_thr.powerElevated, self->_thr.powerCritical)
                                       : self->ValueColor(m.current, self->_thr.fanElevated, self->_thr.fanCritical))
                                : Color(0x96, 0xFF, 0xFF, 0xFF);
                 SolidBrush valBrush(vc);
-                SolidBrush labelBrush(Color(0x96, 0xFF, 0xFF, 0xFF));
+                SolidBrush labelBrush(Color(0xA8, 0xFF, 0xFF, 0xFF));
                 SolidBrush statBrush(Color(0xF2, 0xFF, 0xFF, 0xFF));
 
-                g.DrawString(title, -1, &titleFont, PointF(14, 10), &titleBrush);
-                g.DrawString(cur, -1, &valFont, PointF(84, 2), &valBrush);
-                g.DrawString(self->_hoverPower ? L"W" : L"RPM", -1, &smallFont, PointF(168, 14), &labelBrush);
+                // 顶部行：标题/数值/单位 底线对齐（同一条基线），圆点与标题垂直居中
+                const wchar_t* unit = self->_hoverPower ? L"W" : L"RPM";
+                const float rowBottom = 26.f;
+                HDC mdc2 = CreateCompatibleDC(screenDC);
+                InkBox tb = MeasureInk(mdc2, titleFont, title);
+                InkBox vb = MeasureInk(mdc2, valFont, cur);
+                InkBox ub = MeasureInk(mdc2, smallFont, unit);
+                DeleteDC(mdc2);
+                float groupW = vb.w + 3.f + ub.w;
+                float vx = (float)w - 14.f - groupW;
+                g.DrawString(title, -1, &titleFont, PointF(28.f - tb.x, rowBottom - tb.y - tb.h), &titleBrush);
+                g.DrawString(cur, -1, &valFont, PointF(vx - vb.x, rowBottom - vb.y - vb.h), &valBrush);
+                g.DrawString(unit, -1, &smallFont, PointF(vx + vb.w + 3.f - ub.x, rowBottom - ub.y - ub.h), &labelBrush);
+                SolidBrush dotBrush(vc);
+                g.FillEllipse(&dotBrush, 14.f, rowBottom - tb.h / 2.f - 4.f, 8.f, 8.f);
+
+                // 中部：60 拍趋势图（参照 GlintBar 悬停弹出大图 + 统计）
+                const std::vector<float>& hist = self->_hoverPower ? self->_powerHist : self->_fanHist;
+                float gx = 14.f, gy = 38.f, gw = (float)w - 28.f, gh = 40.f;
+                if (!hist.empty()) {
+                    float vmin = hist[0], vmax = hist[0];
+                    for (float v : hist) {
+                        if (v < vmin) vmin = v;
+                        if (v > vmax) vmax = v;
+                    }
+                    if (vmax - vmin < 1.f)
+                        vmax = vmin + 1.f;
+                    std::vector<PointF> pts;
+                    pts.reserve(hist.size());
+                    int n = (int)hist.size();
+                    for (int i = 0; i < n; i++) {
+                        float x = gx + (n > 1 ? (float)i / (float)(n - 1) : 0.f) * gw;
+                        float y = gy + gh - (hist[i] - vmin) / (vmax - vmin) * gh;
+                        pts.push_back(PointF(x, y));
+                    }
+                    BYTE r = vc.GetR(), gg = vc.GetG(), b = vc.GetB();
+                    GraphicsPath area;
+                    area.AddLines(pts.data(), (INT)pts.size());
+                    area.AddLine(pts.back().X, gy + gh, pts.front().X, gy + gh);
+                    area.CloseFigure();
+                    SolidBrush areaBrush(Color(0x2E, r, gg, b));
+                    g.FillPath(&areaBrush, &area);
+                    Pen linePen(vc, 1.5f);
+                    linePen.SetLineJoin(Gdiplus::LineJoinRound);
+                    g.DrawLines(&linePen, pts.data(), (INT)pts.size());
+                    g.FillEllipse(&dotBrush, pts.back().X - 2.5f, pts.back().Y - 2.5f, 5.f, 5.f);
+                } else {
+                    Pen ghostPen(Color(0x3D, 0xFF, 0xFF, 0xFF), 1.f);
+                    g.DrawLine(&ghostPen, gx, gy + gh, gx + gw, gy + gh);
+                }
 
                 wchar_t minB[24], maxB[24], avgB[24];
                 if (has) {
@@ -568,12 +652,18 @@ LRESULT CALLBACK Widget::TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     wcscpy_s(maxB, L"--");
                     wcscpy_s(avgB, L"--");
                 }
-                g.DrawString(L"最低", -1, &smallFont, PointF(14, 46), &labelBrush);
-                g.DrawString(minB, -1, &statFont, PointF(14, 60), &statBrush);
-                g.DrawString(L"最高", -1, &smallFont, PointF(88, 46), &labelBrush);
-                g.DrawString(maxB, -1, &statFont, PointF(88, 60), &statBrush);
-                g.DrawString(L"平均", -1, &smallFont, PointF(162, 46), &labelBrush);
-                g.DrawString(avgB, -1, &statFont, PointF(162, 60), &statBrush);
+                // 底部统计：三列按列中心居中（标签、数值各自对中，横向整齐）
+                HDC mdc3 = CreateCompatibleDC(screenDC);
+                auto DrawStat = [&](float cx, const wchar_t* lbl, const wchar_t* val) {
+                    InkBox lb = MeasureInk(mdc3, smallFont, lbl);
+                    InkBox vb = MeasureInk(mdc3, statFont, val);
+                    g.DrawString(lbl, -1, &smallFont, PointF(cx - lb.w / 2.f - lb.x, 84), &labelBrush);
+                    g.DrawString(val, -1, &statFont, PointF(cx - vb.w / 2.f - vb.x, 98), &statBrush);
+                };
+                DrawStat(46.f, L"最低", minB);
+                DrawStat(110.f, L"最高", maxB);
+                DrawStat(174.f, L"平均", avgB);
+                DeleteDC(mdc3);
             }
 
             BLENDFUNCTION blend{};
