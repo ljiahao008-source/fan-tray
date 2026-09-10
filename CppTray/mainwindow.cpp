@@ -468,7 +468,13 @@ void ApplySlider(int cardIdx, int sliderIdx) {
     if (sliderIdx < 0 || sliderIdx >= (int)card.sliders.size())
         return;
     auto& s = card.sliders[sliderIdx];
-    ddc::Ddc::SetVCP(card.deviceName, s.code, (DWORD)s.pct);
+    // 亮度/对比度走百分比换算（兼容 max≠100 的机型），音量按原始值写
+    if (s.code == ddc::kVcpLuminance)
+        ddc::Ddc::SetBrightnessPercent(card.deviceName, s.pct);
+    else if (s.code == ddc::kVcpContrast)
+        ddc::Ddc::SetContrastPercent(card.deviceName, s.pct);
+    else
+        ddc::Ddc::SetVCP(card.deviceName, s.code, (DWORD)s.pct);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

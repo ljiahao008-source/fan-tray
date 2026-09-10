@@ -364,15 +364,15 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case mainwin::kActionMsg: {
             // 主窗口按钮动作 → 复用应用动作处理
-            UINT id = 0;
             switch (wp) {
-                case mainwin::ActionSettings:    id = kMenuSettings; break;
-                case mainwin::ActionLockScreen:  id = kMenuLockScreen; break;
-                case mainwin::ActionReset:       id = kMenuReset; break;
-                case mainwin::ActionExit:        id = kMenuExit; break;
+                case mainwin::ActionSettings:    HandleAppAction(kMenuSettings, mainwin::Hwnd()); break;
+                case mainwin::ActionLockScreen:  HandleAppAction(kMenuLockScreen, mainwin::Hwnd()); break;
+                case mainwin::ActionReset:       HandleAppAction(kMenuReset, mainwin::Hwnd()); break;
+                case mainwin::ActionExit:        HandleAppAction(kMenuExit, mainwin::Hwnd()); break;
+                case mainwin::ActionTempWarm:    g_colorTemp.AdjustTemperature(500); break;
+                case mainwin::ActionTempCool:    g_colorTemp.AdjustTemperature(-500); break;
+                case mainwin::ActionTempToggle:  g_colorTemp.TogglePause(); break;
             }
-            if (id)
-                HandleAppAction(id, mainwin::Hwnd());
             return 0;
         }
         default:
