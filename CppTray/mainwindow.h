@@ -1,7 +1,7 @@
 #pragma once
-// mainwindow.h —— 主程序窗口（监控仪表盘）
-// 只展示实时监控数值（功耗/风扇/占用/温度/内存/网速），不承载设置；
-// 设置仍从托盘菜单进入。关闭窗口 = 隐藏回托盘。
+// mainwindow.h —— 主程序交互窗口
+// 上部实时监控数值，底部操作按钮（设置/锁屏设置/重置统计/退出），
+// 点击按钮发 kActionMsg 给宿主隐藏主窗口处理；关闭窗口 = 隐藏回托盘。
 
 #include <windows.h>
 #include "monitor.h"
@@ -9,8 +9,22 @@
 
 namespace mainwin {
 
+// 主窗口动作（按钮点击 → 宿主处理）
+enum Action : UINT {
+    ActionSettings = 1,     // 打开设置对话框
+    ActionLockScreen = 2,   // 打开锁屏设置窗口
+    ActionReset = 3,        // 重置统计
+    ActionExit = 4,         // 退出程序
+};
+
+// 按钮动作消息：主窗口 PostMessage 到宿主隐藏主窗口，wParam = Action
+constexpr UINT kActionMsg = WM_APP + 12;
+
 // 注册窗口类并创建（隐藏）。启动时调用一次。
 bool Create(HINSTANCE hInst);
+
+// 设置宿主隐藏主窗口句柄（用于转发按钮动作），Create 后调用。
+void SetHost(HWND hostHiddenMain);
 
 // 居中显示（从托盘/菜单唤起时调用）
 void Show();

@@ -157,6 +157,36 @@ void ApplyColorTemp(const AppConfig& cfg) {
     g_colorTemp.ApplySettings(ColorTempSettingsFromConfig(cfg));
 }
 
+// —— 应用动作（托盘菜单 / 主窗口按钮共用）——
+void HandleAppAction(UINT id, HWND parent) {
+    switch (id) {
+        case kMenuSettings: {
+            AppConfig newCfg = g_app.cfg;
+            if (ShowSettingsDialog(parent, newCfg)) {
+                g_app.cfg = newCfg;
+                SaveConfig(newCfg);
+                g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
+                if (g_app.widget)
+                    g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
+                mainwin::ApplyConfig(newCfg);                   // 主窗口显示项即时生效
+                ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
+                ApplyColorTemp(newCfg);                         // 色温设置即时生效
+            }
+            break;
+        }
+        case kMenuLockScreen:
+            lockscreen::ShowLockScreenWindow(parent);
+            break;
+        case kMenuReset:
+            if (g_app.core)
+                g_app.core->ResetStats();
+            break;
+        case kMenuExit:
+            PostMessage(g_app.mainHwnd, WM_CLOSE, 0, 0);
+            break;
+    }
+}
+
 DWORD WINAPI SampleThreadProc(LPVOID p);
 
 // —— 采样线程（后台）：读硬件 → 快照 → 通知 UI ——
@@ -289,6 +319,19 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_colorTemp.HandleHotkey(msg, wp))
                 return 0;
             break;
+        case mainwin::kActionMsg: {
+            // 主窗口按钮动作 → 复用应用动作处理
+            UINT id = 0;
+            switch (wp) {
+                case mainwin::ActionSettings:    id = kMenuSettings; break;
+                case mainwin::ActionLockScreen:  id = kMenuLockScreen; break;
+                case mainwin::ActionReset:       id = kMenuReset; break;
+                case mainwin::ActionExit:        id = kMenuExit; break;
+            }
+            if (id)
+                HandleAppAction(id, mainwin::Hwnd());
+            return 0;
+        }
         default:
             if (msg == g_app.taskbarCreatedMsg) {
                 // explorer 重启：任务栏重建后重新嵌入
@@ -309,27 +352,6 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
         case kMenuOpenMain:
             mainwin::Show();
             break;
-        case kMenuSettings: {
-            AppConfig newCfg = g_app.cfg;
-            if (ShowSettingsDialog(hwnd, newCfg)) {
-                g_app.cfg = newCfg;
-                SaveConfig(newCfg);
-                g_app.intervalMs = newCfg.RefreshIntervalMs;   // 采样线程下一拍生效
-                if (g_app.widget)
-                    g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
-                mainwin::ApplyConfig(newCfg);                   // 主窗口显示项即时生效
-                ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
-                ApplyColorTemp(newCfg);                         // 色温设置即时生效
-            }
-            break;
-        }
-        case kMenuLockScreen:
-            lockscreen::ShowLockScreenWindow(hwnd);
-            break;
-        case kMenuReset:
-            if (g_app.core)
-                g_app.core->ResetStats();
-            break;
         case kMenuAutoStart: {
             bool enable = !checked;   // 菜单勾选状态取反 = 目标状态
             if (ApplyAutoStart(enable)) {
@@ -341,8 +363,8 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
             }
             break;
         }
-        case kMenuExit:
-            PostMessage(g_app.mainHwnd, WM_CLOSE, 0, 0);
+        default:
+            HandleAppAction(id, hwnd);
             break;
     }
 }
@@ -393,7 +415,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     g_app.tray = new TrayIcon();
     g_app.tray->Create(g_app.mainHwnd, hInst);
 
-    mainwin::Create(hInst);                        // 主监控窗口（隐藏，双击托盘/菜单打开）
+    mainwin::Create(hInst);                        // 主交互窗口（隐藏，双击托盘/菜单打开）
+    mainwin::SetHost(g_app.mainHwnd);              // 按钮动作转发到宿主
     mainwin::ApplyConfig(g_app.cfg);
 
     ApplyBrightnessHotkeys(g_app.cfg);   // 按配置安装亮度快捷键（DDC/CI，仅外接显示器）

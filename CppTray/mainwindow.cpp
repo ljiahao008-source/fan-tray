@@ -1,5 +1,7 @@
-// mainwindow.cpp —— 主程序窗口（监控仪表盘）
-// 深色卡片风格，与悬浮窗同族；数值随阈值变色；关闭即隐藏回托盘。
+// mainwindow.cpp —— 主程序交互窗口
+// 上部：实时监控数值（深色卡片风格，随阈值变色）
+// 下部：操作按钮（设置/锁屏设置/重置统计/退出），点击转发宿主处理
+// 关闭窗口 = 隐藏回托盘；退出需走【退出】按钮或托盘菜单。
 
 #include "mainwindow.h"
 
@@ -25,10 +27,11 @@ using Gdiplus::UnitPixel;
 namespace {
 
 constexpr wchar_t kMainWinClass[] = L"MechrevoMainWindowClass";
-constexpr int kClientW = 300, kClientH = 348;
+constexpr int kClientW = 300, kClientH = 372;
 
 HWND g_hwnd = nullptr;
 HINSTANCE g_hInst = nullptr;
+HWND g_host = nullptr;
 SampleSet g_snap;
 AppConfig g_cfg;
 Thresholds g_thr;
@@ -42,7 +45,6 @@ Color SevColor(double v, double elevated, double critical) {
     return Color(255, 0xF8, 0x71, 0x71);       // 红
 }
 
-// 指标显示行
 struct Row {
     const wchar_t* label;
     wchar_t value[40];
@@ -147,8 +149,33 @@ void DrawWindow(HWND hwnd) {
     ReleaseDC(nullptr, screenDC);
 }
 
+// 创建底部操作按钮（点击 → kActionMsg 转发宿主）
+void CreateButtons() {
+    struct Btn { int id; const wchar_t* text; int x, w; };
+    Btn btns[] = {
+        { (int)mainwin::ActionSettings,    L"设置",       13, 56 },
+        { (int)mainwin::ActionLockScreen,  L"锁屏设置",   79, 74 },
+        { (int)mainwin::ActionReset,       L"重置统计",   161, 74 },
+        { (int)mainwin::ActionExit,        L"退出",       243, 44 },
+    };
+    for (auto& b : btns) {
+        CreateWindowExW(0, L"BUTTON", b.text,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                        b.x, 330, b.w, 30, g_hwnd, (HMENU)(INT_PTR)b.id, g_hInst, nullptr);
+    }
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case WM_COMMAND: {
+            int id = LOWORD(wp);
+            if (id >= (int)mainwin::ActionSettings && id <= (int)mainwin::ActionExit) {
+                if (g_host)
+                    PostMessageW(g_host, mainwin::kActionMsg, (WPARAM)id, 0);
+                return 0;
+            }
+            break;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             BeginPaint(hwnd, &ps);
@@ -186,10 +213,17 @@ bool Create(HINSTANCE hInst) {
     RegisterClassW(&wc);
 
     g_hwnd = CreateWindowExW(0, kMainWinClass, L"机械革命监控",
-                             WS_OVERLAPPEDWINDOW,
+                             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                              CW_USEDEFAULT, CW_USEDEFAULT, kClientW + 16, kClientH + 39,
                              nullptr, nullptr, hInst, nullptr);
-    return g_hwnd != nullptr;
+    if (!g_hwnd)
+        return false;
+    CreateButtons();
+    return true;
+}
+
+void SetHost(HWND hostHiddenMain) {
+    g_host = hostHiddenMain;
 }
 
 void Show() {
