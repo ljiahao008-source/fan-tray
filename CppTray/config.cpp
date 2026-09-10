@@ -113,22 +113,45 @@ AppConfig LoadConfig() {
     JsonBool(s, L"ShowNet", &cfg.ShowNet);
     JsonBool(s, L"BrightnessKeysEnabled", &cfg.BrightnessKeysEnabled);
     JsonInt(s, L"BrightnessStepPercent", &cfg.BrightnessStepPercent);
+    JsonBool(s, L"ColorTempEnabled", &cfg.ColorTempEnabled);
+    JsonInt(s, L"ColorTempDayK", &cfg.ColorTempDayK);
+    JsonInt(s, L"ColorTempNightK", &cfg.ColorTempNightK);
+    JsonInt(s, L"ColorTempSunriseMinutes", &cfg.ColorTempSunriseMinutes);
+    JsonInt(s, L"ColorTempSunsetMinutes", &cfg.ColorTempSunsetMinutes);
+    JsonInt(s, L"ColorTempTransitionMinutes", &cfg.ColorTempTransitionMinutes);
+    JsonInt(s, L"ColorTempStepK", &cfg.ColorTempStepK);
 
     if (cfg.RefreshIntervalMs < 250 || cfg.RefreshIntervalMs > 60000)
         cfg.RefreshIntervalMs = 1000;
     if (cfg.BrightnessStepPercent < 1 || cfg.BrightnessStepPercent > 50)
         cfg.BrightnessStepPercent = 10;
+    if (cfg.ColorTempDayK < 1000 || cfg.ColorTempDayK > 10000)
+        cfg.ColorTempDayK = 6500;
+    if (cfg.ColorTempNightK < 1000 || cfg.ColorTempNightK > 10000)
+        cfg.ColorTempNightK = 4500;
+    if (cfg.ColorTempSunriseMinutes < 0 || cfg.ColorTempSunriseMinutes >= 1440)
+        cfg.ColorTempSunriseMinutes = 360;
+    if (cfg.ColorTempSunsetMinutes < 0 || cfg.ColorTempSunsetMinutes >= 1440)
+        cfg.ColorTempSunsetMinutes = 1140;
+    if (cfg.ColorTempTransitionMinutes < 1 || cfg.ColorTempTransitionMinutes > 300)
+        cfg.ColorTempTransitionMinutes = 60;
+    if (cfg.ColorTempStepK < 50 || cfg.ColorTempStepK > 2000)
+        cfg.ColorTempStepK = 500;
     return cfg;
 }
 
 bool SaveConfig(const AppConfig& cfg) {
-    wchar_t buf[1024] = {};
+    wchar_t buf[1536] = {};
     swprintf_s(buf,
                L"{\r\n  \"RefreshIntervalMs\": %d,\r\n  \"AutoStart\": %s,\r\n"
                L"  \"ShowPower\": %s,\r\n  \"ShowFan\": %s,\r\n"
                L"  \"ShowCpuUsage\": %s,\r\n  \"ShowCpuTemp\": %s,\r\n"
                L"  \"ShowMem\": %s,\r\n  \"ShowNet\": %s,\r\n"
-               L"  \"BrightnessKeysEnabled\": %s,\r\n  \"BrightnessStepPercent\": %d\r\n}",
+               L"  \"BrightnessKeysEnabled\": %s,\r\n  \"BrightnessStepPercent\": %d,\r\n"
+               L"  \"ColorTempEnabled\": %s,\r\n  \"ColorTempDayK\": %d,\r\n"
+               L"  \"ColorTempNightK\": %d,\r\n  \"ColorTempSunriseMinutes\": %d,\r\n"
+               L"  \"ColorTempSunsetMinutes\": %d,\r\n  \"ColorTempTransitionMinutes\": %d,\r\n"
+               L"  \"ColorTempStepK\": %d\r\n}",
                cfg.RefreshIntervalMs,
                cfg.AutoStart ? L"true" : L"false",
                cfg.ShowPower ? L"true" : L"false",
@@ -138,7 +161,14 @@ bool SaveConfig(const AppConfig& cfg) {
                cfg.ShowMem ? L"true" : L"false",
                cfg.ShowNet ? L"true" : L"false",
                cfg.BrightnessKeysEnabled ? L"true" : L"false",
-               cfg.BrightnessStepPercent);
+               cfg.BrightnessStepPercent,
+               cfg.ColorTempEnabled ? L"true" : L"false",
+               cfg.ColorTempDayK,
+               cfg.ColorTempNightK,
+               cfg.ColorTempSunriseMinutes,
+               cfg.ColorTempSunsetMinutes,
+               cfg.ColorTempTransitionMinutes,
+               cfg.ColorTempStepK);
 
     // 统一写 UTF-8（与 LoadConfig 的默认解码路径一致，避免保存后读回乱码）
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, nullptr, 0, nullptr, nullptr);

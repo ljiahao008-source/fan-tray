@@ -13,6 +13,7 @@
 #include "settingsdlg.h"
 #include "lockscreendlg.h"
 #include "ddcbrightness.h"
+#include "colortemp.h"
 
 namespace {
 
@@ -42,6 +43,8 @@ App g_app;
 
 // 屏幕亮度快捷键（DDC/CI 模块，仅外接显示器）
 ddcb::HotkeyManager g_brightnessKeys;
+// 色温护眼（LightBulb 引擎）
+colortemp::ColorTemperatureManager g_colorTemp;
 
 // 崩溃兜底：写 crash.log
 LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
@@ -133,6 +136,25 @@ void ApplyBrightnessHotkeys(const AppConfig& cfg) {
         WriteLog(L"brightness hotkey register failed (occupied?)");
 }
 
+// AppConfig → 色温模块配置
+colortemp::Settings ColorTempSettingsFromConfig(const AppConfig& cfg) {
+    colortemp::Settings s;
+    s.enabled = cfg.ColorTempEnabled;
+    s.dayTemperature = cfg.ColorTempDayK;
+    s.nightTemperature = cfg.ColorTempNightK;
+    s.sunriseMinutes = cfg.ColorTempSunriseMinutes;
+    s.sunsetMinutes = cfg.ColorTempSunsetMinutes;
+    s.transitionMinutes = cfg.ColorTempTransitionMinutes;
+    s.transitionOffset = 0.5;
+    s.hotkeyStepK = cfg.ColorTempStepK;
+    return s;
+}
+
+// 色温配置热更新（设置保存后调用）
+void ApplyColorTemp(const AppConfig& cfg) {
+    g_colorTemp.ApplySettings(ColorTempSettingsFromConfig(cfg));
+}
+
 DWORD WINAPI SampleThreadProc(LPVOID p);
 
 // —— 采样线程（后台）：读硬件 → 快照 → 通知 UI ——
@@ -213,6 +235,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_CLOSE: {
             g_brightnessKeys.Uninstall();   // 注销亮度快捷键
+            g_colorTemp.Stop();             // 恢复 gamma 并停色温线程
             InterlockedExchange(&g_app.running, 0);
             // 采样线程可能在 WMI 阻塞：放宽等待；超时（线程未退出）则跳过 delete，进程退出由 OS 回收
             DWORD wait = WAIT_OBJECT_0;
@@ -239,8 +262,10 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostQuitMessage(0);
             return 0;
         case WM_HOTKEY:
-            // 亮度 +/− 快捷键（Ctrl+Alt+↑/↓）
+            // 亮度快捷键（Ctrl+Alt+↑/↓）→ 色温快捷键（Ctrl+Alt+PgUp/PgDn/Home）
             if (g_brightnessKeys.HandleMessage(msg, wp))
+                return 0;
+            if (g_colorTemp.HandleHotkey(msg, wp))
                 return 0;
             break;
         default:
@@ -269,6 +294,7 @@ extern "C" void TrayMenuCallback(UINT id, bool checked, HWND hwnd) {
                 if (g_app.widget)
                     g_app.widget->ApplyConfig(newCfg);          // 显示项即时生效
                 ApplyBrightnessHotkeys(newCfg);                 // 亮度快捷键即时生效
+                ApplyColorTemp(newCfg);                         // 色温设置即时生效
             }
             break;
         }
@@ -343,6 +369,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     g_app.tray->Create(g_app.mainHwnd, hInst);
 
     ApplyBrightnessHotkeys(g_app.cfg);   // 按配置安装亮度快捷键（DDC/CI，仅外接显示器）
+    ApplyColorTemp(g_app.cfg);           // 色温配置就位
+    g_colorTemp.Start(g_app.mainHwnd);   // 启动色温线程（每秒按调度应用 gamma）
 
     g_app.widget->ApplyConfig(g_app.cfg);   // 启动即按配置确定显示项（首拍数据到达前也保持正确宽度）
 
